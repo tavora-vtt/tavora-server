@@ -5,6 +5,9 @@ asset pipeline and, in a release build, the embedded web client.
 
 Design: [concept doc 02](https://github.com/tavora-vtt/tavora-docs/blob/main/concept/02-architecture.md).
 
+> Links to `tavora-docs` point at a repository that is currently private, so they resolve
+> only for members of the organisation. The design rationale will open up with it.
+
 ## Run it
 
 ```
