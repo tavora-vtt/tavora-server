@@ -185,6 +185,7 @@ func newHarness(t *testing.T) *harness {
 	router := NewRouter()
 	RegisterCoreIntents(router)
 	RegisterChatIntents(router)
+	RegisterCombatIntents(router)
 
 	tickets := NewTicketStore(DefaultTicketTTL)
 

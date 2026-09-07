@@ -168,6 +168,21 @@ whole path for free: authorization, the event log, per-recipient redaction and l
 fan-out. `canEdit` on the listing is the resolved grant, not a guess, and the server
 refuses a patch from someone who only has read access regardless of what the client shows.
 
+## Combat
+
+`combat.start` gathers the tokens on a scene, rolls initiative for each and stores the
+order; `combat.next` advances the turn and wraps into the next round; `combat.end` clears
+it. All three are staff only and all three fan out, so nobody has to be told whose turn it
+is.
+
+The engine owns the tracker, the round and turn counters and the order. What initiative
+*means* is a per-combat `formula` that defaults to `1d20` and is the seam a game system
+will fill, per [concept doc 07](https://github.com/tavora-vtt/tavora-docs/blob/main/concept/07-game-systems.md).
+Systems whose initiative is not rolled will declare a manual ordering there.
+
+The document write and its event share one transaction, so a turn that was announced is a
+turn that was committed.
+
 ## Chat and dice
 
 `chat.post` carries what a person typed. `chat.roll` carries an expression, and the server
