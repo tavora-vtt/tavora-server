@@ -216,7 +216,28 @@ func (d AuthDeps) setupHandler() http.HandlerFunc {
 			return
 		}
 
-		user, err := d.Service.CreateUser(r.Context(), body.Username, body.Password, true)
+		var (
+			user    *storage.User
+			token   string
+			expires time.Time
+		)
+
+		err = d.Store.Tx(r.Context(), func(tx storage.Tx) error {
+			built, buildErr := d.Service.BuildUser(body.Username, body.Password, true)
+			if buildErr != nil {
+				return buildErr
+			}
+			if built.PasswordHash == "" {
+				return auth.ErrWeakPassword
+			}
+			if insertErr := d.Service.InsertUser(r.Context(), tx, built); insertErr != nil {
+				return insertErr
+			}
+
+			user = built
+			token, expires, buildErr = d.Service.IssueSession(r.Context(), tx, built.ID, r.UserAgent())
+			return buildErr
+		})
 		switch {
 		case errors.Is(err, auth.ErrWeakPassword):
 			writeJSON(w, http.StatusBadRequest, apiError{
@@ -230,6 +251,12 @@ func (d AuthDeps) setupHandler() http.HandlerFunc {
 				MessageKey: "core.auth.usernameTaken",
 			})
 			return
+		case errors.Is(err, auth.ErrInvalidCredentials):
+			writeJSON(w, http.StatusBadRequest, apiError{
+				Code:       "bad_request",
+				MessageKey: "core.auth.usernameRequired",
+			})
+			return
 		case err != nil:
 			writeJSON(w, http.StatusInternalServerError, apiError{
 				Code:       "internal",
@@ -238,6 +265,7 @@ func (d AuthDeps) setupHandler() http.HandlerFunc {
 			return
 		}
 
+		d.issueCookie(w, r, token, expires)
 		writeJSON(w, http.StatusCreated, identityOf(user))
 	}
 }

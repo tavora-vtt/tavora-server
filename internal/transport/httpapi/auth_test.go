@@ -328,3 +328,30 @@ func TestHealthNeedsNoSession(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupSignsTheAdministratorIn(t *testing.T) {
+	h := newAuthHarness(t)
+
+	response := h.post(t, "/api/setup", `{"username":"nadia","password":"a-long-enough-password"}`)
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("setup returned %d", response.StatusCode)
+	}
+
+	var issued *http.Cookie
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == SessionCookie {
+			issued = cookie
+		}
+	}
+	if issued == nil {
+		t.Fatal("setup did not issue a session, the first administrator would land on a 401")
+	}
+
+	me := h.get(t, "/api/auth/me")
+	defer me.Body.Close()
+	if me.StatusCode != http.StatusOK {
+		t.Errorf("me returned %d right after setup", me.StatusCode)
+	}
+}
