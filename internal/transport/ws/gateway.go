@@ -2,15 +2,12 @@ package ws
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/tavora-vtt/tavora-server/internal/core/access"
 	"github.com/tavora-vtt/tavora-server/internal/core/perm"
-	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
 
 const (
@@ -19,12 +16,11 @@ const (
 )
 
 type Gateway struct {
-	deps       Deps
-	devTickets bool
-	allowJSON  bool
+	deps      Deps
+	allowJSON bool
 }
 
-func NewGateway(deps Deps, devTickets bool) *Gateway {
+func NewGateway(deps Deps) *Gateway {
 	if deps.Router == nil {
 		deps.Router = NewRouter()
 		RegisterCoreIntents(deps.Router)
@@ -38,7 +34,7 @@ func NewGateway(deps Deps, devTickets bool) *Gateway {
 	if deps.Access == nil {
 		deps.Access = access.NewResolver(deps.Store, perm.OpenPolicy{})
 	}
-	return &Gateway{deps: deps, devTickets: devTickets, allowJSON: devTickets}
+	return &Gateway{deps: deps}
 }
 
 func (g *Gateway) AllowJSONFormat(allow bool) {
@@ -57,54 +53,6 @@ func (g *Gateway) Tickets() *TicketStore { return g.deps.Tickets }
 func (g *Gateway) Registry() *Registry { return g.deps.Registry }
 
 func (g *Gateway) Close() { g.deps.Registry.Close() }
-
-type ticketRequest struct {
-	UserID  string `json:"userId"`
-	WorldID string `json:"worldId"`
-	Role    string `json:"role"`
-}
-
-type ticketResponse struct {
-	Ticket    string `json:"ticket"`
-	ExpiresAt string `json:"expiresAt"`
-}
-
-func (g *Gateway) TicketHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !g.devTickets {
-			writeJSON(w, http.StatusNotImplemented, map[string]string{
-				"code":       "not_implemented",
-				"messageKey": "core.auth.notAvailableYet",
-			})
-			return
-		}
-
-		var request ticketRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"code": CodeBadRequest})
-			return
-		}
-		if request.UserID == "" || request.WorldID == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"code": CodeBadRequest})
-			return
-		}
-		if request.Role == "" {
-			request.Role = "player"
-		}
-
-		token, expires, err := g.deps.Tickets.Issue(
-			storage.ID(request.UserID), storage.ID(request.WorldID), request.Role)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"code": CodeInternal})
-			return
-		}
-
-		writeJSON(w, http.StatusOK, ticketResponse{
-			Ticket:    token,
-			ExpiresAt: expires.UTC().Format(time.RFC3339),
-		})
-	}
-}
 
 func (g *Gateway) WebSocketHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -151,10 +99,4 @@ func (c *coderConn) Close(reason string) error {
 		reason = reason[:closeReasonMax]
 	}
 	return c.conn.Close(websocket.StatusNormalClosure, reason)
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
 }

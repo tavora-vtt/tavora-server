@@ -21,8 +21,8 @@ curl localhost:30000/readyz
 | `TAVORA_SERVER_BIND` | `0.0.0.0:30000` | Listen address |
 | `TAVORA_STORAGE_DRIVER` | `sqlite` | `sqlite` or `postgres` |
 | `TAVORA_STORAGE_DSN` | `data/tavora.db` | File path, or a PostgreSQL connection string |
-| `TAVORA_DEV_UNSAFE_TICKETS` | unset | `1` opens an unauthenticated ticket endpoint. Development only |
 | `TAVORA_PROTOCOL_JSON` | unset | `1` allows `/ws?format=json`, a readable encoding for debugging |
+| `TAVORA_SECURE_COOKIES` | unset | `1` forces the `Secure` flag when a proxy terminates TLS |
 
 The default install has no external dependency: SQLite through a cgo-free driver, so the
 static binary from [ADR 0001](https://github.com/tavora-vtt/tavora-docs/blob/main/adr/0001-server-language.md)
@@ -83,15 +83,43 @@ written, so nothing published in between is lost; the replay is prepended ahead 
 that arrived during catch-up, and the writer drops any event whose sequence it has already
 sent.
 
-The ticket endpoint is closed by default and returns 501. `TAVORA_DEV_UNSAFE_TICKETS=1`
-opens it and logs a warning at startup, because until authentication lands in M1 it would
-hand a session to anyone who asks.
-
 `document.patch` is the first real intent and runs the whole path from
 [concept doc 02](https://github.com/tavora-vtt/tavora-docs/blob/main/concept/02-architecture.md):
 authorize, apply, append the event, fan out. Authorization, mutation and projection all
 happen inside one transaction, so what a recipient is shown is consistent with what was
 committed.
+
+## Authentication
+
+A fresh install has no accounts and says so at startup. `POST /api/setup` creates the first
+administrator and then closes permanently.
+
+| Route | Does |
+| --- | --- |
+| `GET /api/setup` | Whether the install still needs its first account |
+| `POST /api/setup` | Create the first administrator, once |
+| `POST /api/auth/login` | Sign in, sets the session cookie |
+| `POST /api/auth/logout` | Ends this session |
+| `GET /api/auth/me` | The signed-in identity |
+| `POST /api/session/ticket` | A short-lived single-use ticket for the WebSocket |
+
+Passwords are hashed with Argon2id at the OWASP baseline of 19 MiB, two passes, which is
+cheap enough for a Raspberry Pi and expensive enough to matter.
+
+**Session tokens are stored hashed.** The database holds the SHA-256 of the token, never
+the token, so a database leak does not hand over live sessions. There is a test that fails
+if the raw token ever becomes a lookup key.
+
+**Sign-in does not reveal whether an account exists.** An unknown username still burns a
+full Argon2 verification against a decoy hash, and both cases return byte-identical
+responses. Two tests hold that, one at the service and one at the HTTP layer.
+
+Failed attempts are counted per username and per address, with a lockout that also applies
+to the correct password once tripped. Changing a password ends every session of that user.
+
+The ticket endpoint needs a signed-in user and a membership in the requested world, and it
+stamps the role the world records. A server administrator who is not a member of a world
+gets a 403.
 
 ## Permissions
 
@@ -134,9 +162,9 @@ type. A cursor frame is 62 bytes as Protobuf and 147 as JSON.
 ## Status
 
 M0 is complete and M1 is under way. HTTP surface, graceful shutdown, the storage port with
-both backends, the WebSocket gateway with lanes, backpressure and reconnect catch-up, and
-the permission model with field-level redaction are in place. Authentication and the scene
-model land next.
+both backends, the WebSocket gateway with lanes, backpressure and reconnect catch-up,
+authentication, and the permission model with field-level redaction are in place. World and
+membership management, then the scene model, land next.
 
 ## Licence
 

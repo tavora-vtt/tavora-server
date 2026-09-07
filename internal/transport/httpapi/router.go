@@ -14,7 +14,7 @@ type Deps struct {
 	Log       *slog.Logger
 	Ready     ReadinessCheck
 	Backend   string
-	Ticket    http.HandlerFunc
+	Auth      AuthDeps
 	WebSocket http.HandlerFunc
 }
 
@@ -45,14 +45,24 @@ func NewRouter(deps Deps) http.Handler {
 		})
 	})
 
-	if deps.Ticket != nil {
-		mux.HandleFunc("POST /api/session/ticket", deps.Ticket)
+	if deps.Auth.Service != nil {
+		mux.HandleFunc("GET /api/setup", deps.Auth.setupStateHandler())
+		mux.HandleFunc("POST /api/setup", deps.Auth.setupHandler())
+		mux.HandleFunc("POST /api/auth/login", deps.Auth.loginHandler())
+		mux.HandleFunc("POST /api/auth/logout", deps.Auth.logoutHandler())
+		mux.HandleFunc("GET /api/auth/me", deps.Auth.meHandler())
+		mux.HandleFunc("POST /api/session/ticket", deps.Auth.ticketHandler())
 	}
 	if deps.WebSocket != nil {
 		mux.HandleFunc("GET /ws", deps.WebSocket)
 	}
 
-	return withRequestLog(deps.Log, mux)
+	var handler http.Handler = mux
+	if deps.Auth.Service != nil {
+		handler = deps.Auth.withUser(handler)
+	}
+
+	return withRequestLog(deps.Log, handler)
 }
 
 func withRequestLog(log *slog.Logger, next http.Handler) http.Handler {

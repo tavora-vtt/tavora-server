@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
@@ -21,6 +22,9 @@ func Run(t *testing.T, newStore Factory) {
 	}{
 		{"WorldRoundTrip", testWorldRoundTrip},
 		{"MemberRoundTrip", testMemberRoundTrip},
+		{"UserRoundTrip", testUserRoundTrip},
+		{"UserSessionLifecycle", testUserSessionLifecycle},
+		{"DeletingAUserRemovesItsSessions", testUserCascade},
 		{"MissingMemberIsNotFound", testMissingMemberIsNotFound},
 		{"DocumentRoundTrip", testDocumentRoundTrip},
 		{"UpsertPreservesCreatedAt", testUpsertPreservesCreatedAt},
@@ -766,5 +770,168 @@ func testMissingMemberIsNotFound(t *testing.T, store storage.Store) {
 	})
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func testUserRoundTrip(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+
+	err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutUser(ctx, &storage.User{
+			ID: "user-1", Username: "nadia", Email: "nadia@example.org",
+			PasswordHash: "$argon2id$fake", Locale: "de", IsAdmin: true,
+		})
+	})
+	if err != nil {
+		t.Fatalf("put user: %v", err)
+	}
+
+	var byID, byName *storage.User
+	var count int
+	err = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		if byID, readErr = q.GetUser(ctx, "user-1"); readErr != nil {
+			return readErr
+		}
+		if byName, readErr = q.GetUserByUsername(ctx, "nadia"); readErr != nil {
+			return readErr
+		}
+		count, readErr = q.CountUsers(ctx)
+		return readErr
+	})
+	if err != nil {
+		t.Fatalf("read user: %v", err)
+	}
+
+	if byID.Username != "nadia" || byID.Email != "nadia@example.org" || !byID.IsAdmin {
+		t.Errorf("user = %+v", byID)
+	}
+	if byName.ID != byID.ID {
+		t.Errorf("lookup by name returned %s", byName.ID)
+	}
+	if byID.CreatedAt.IsZero() {
+		t.Error("created at not set")
+	}
+	if byID.Disabled() {
+		t.Error("user should not be disabled")
+	}
+	if count != 1 {
+		t.Errorf("count = %d", count)
+	}
+
+	disabled := byID.CreatedAt
+	byID.DisabledAt = &disabled
+	byID.IsAdmin = false
+	if err := store.Tx(ctx, func(tx storage.Tx) error { return tx.PutUser(ctx, byID) }); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	_ = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		byID, readErr = q.GetUser(ctx, "user-1")
+		return readErr
+	})
+	if !byID.Disabled() || byID.IsAdmin {
+		t.Errorf("update lost: %+v", byID)
+	}
+}
+
+func testUserSessionLifecycle(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+
+	err := store.Tx(ctx, func(tx storage.Tx) error {
+		if err := tx.PutUser(ctx, &storage.User{ID: "user-1", Username: "nadia"}); err != nil {
+			return err
+		}
+		return tx.PutUserSession(ctx, &storage.UserSession{
+			TokenHash: "hash-1", UserID: "user-1",
+			ExpiresAt: time.Now().UTC().Add(time.Hour), UserAgent: "go-test",
+		})
+	})
+	if err != nil {
+		t.Fatalf("put session: %v", err)
+	}
+
+	var session *storage.UserSession
+	if err := store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		session, readErr = q.GetUserSession(ctx, "hash-1")
+		return readErr
+	}); err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if session.UserID != "user-1" || session.UserAgent != "go-test" {
+		t.Errorf("session = %+v", session)
+	}
+	if session.ExpiresAt.Before(session.CreatedAt) {
+		t.Error("expiry is before creation")
+	}
+
+	seen := time.Now().UTC().Add(time.Minute)
+	if err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.TouchUserSession(ctx, "hash-1", seen)
+	}); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+
+	_ = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		session, readErr = q.GetUserSession(ctx, "hash-1")
+		return readErr
+	})
+	if !session.LastSeenAt.After(session.CreatedAt) {
+		t.Errorf("last seen not advanced: %v", session.LastSeenAt)
+	}
+
+	if err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.DeleteUserSession(ctx, "hash-1")
+	}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	err = store.ReadOnly(ctx, func(q storage.Query) error {
+		_, readErr := q.GetUserSession(ctx, "hash-1")
+		return readErr
+	})
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("session survived deletion: %v", err)
+	}
+}
+
+func testUserCascade(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+
+	err := store.Tx(ctx, func(tx storage.Tx) error {
+		if err := tx.PutUser(ctx, &storage.User{ID: "user-1", Username: "nadia"}); err != nil {
+			return err
+		}
+		for _, hash := range []string{"hash-1", "hash-2"} {
+			if err := tx.PutUserSession(ctx, &storage.UserSession{
+				TokenHash: hash, UserID: "user-1",
+				ExpiresAt: time.Now().UTC().Add(time.Hour),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.DeleteUserSessionsOf(ctx, "user-1")
+	}); err != nil {
+		t.Fatalf("delete sessions: %v", err)
+	}
+
+	for _, hash := range []string{"hash-1", "hash-2"} {
+		err := store.ReadOnly(ctx, func(q storage.Query) error {
+			_, readErr := q.GetUserSession(ctx, hash)
+			return readErr
+		})
+		if !errors.Is(err, storage.ErrNotFound) {
+			t.Errorf("%s survived: %v", hash, err)
+		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tavora-vtt/tavora-server/internal/core/access"
+	"github.com/tavora-vtt/tavora-server/internal/core/auth"
 	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 	"github.com/tavora-vtt/tavora-server/internal/storage/postgres"
@@ -31,8 +32,8 @@ type Config struct {
 	Bind            string
 	StorageDriver   string
 	StorageDSN      string
-	DevTickets      bool
 	JSONProtocol    bool
+	SecureCookies   bool
 	ShutdownTimeout time.Duration
 }
 
@@ -52,11 +53,11 @@ func ConfigFromEnv() Config {
 	if value := os.Getenv("TAVORA_STORAGE_DSN"); value != "" {
 		config.StorageDSN = value
 	}
-	if os.Getenv("TAVORA_DEV_UNSAFE_TICKETS") == "1" {
-		config.DevTickets = true
-	}
 	if os.Getenv("TAVORA_PROTOCOL_JSON") == "1" {
 		config.JSONProtocol = true
+	}
+	if os.Getenv("TAVORA_SECURE_COOKIES") == "1" {
+		config.SecureCookies = true
 	}
 	return config
 }
@@ -87,29 +88,44 @@ func New(config Config, log *slog.Logger) (*App, error) {
 	router := ws.NewRouter()
 	ws.RegisterCoreIntents(router)
 
+	tickets := ws.NewTicketStore(ws.DefaultTicketTTL)
+
 	gateway := ws.NewGateway(ws.Deps{
 		Store:    store,
 		Registry: ws.NewRegistry(log),
-		Tickets:  ws.NewTicketStore(ws.DefaultTicketTTL),
+		Tickets:  tickets,
 		Router:   router,
 		Access:   access.NewResolver(store, perm.OpenPolicy{}),
 		Log:      log,
-	}, config.DevTickets)
+	})
 
-	gateway.AllowJSONFormat(config.JSONProtocol || config.DevTickets)
+	gateway.AllowJSONFormat(config.JSONProtocol)
 
-	if config.DevTickets {
-		log.Warn("unauthenticated development tickets are enabled, never do this in production")
-	}
 	if config.JSONProtocol {
 		log.Info("readable json protocol available at /ws?format=json")
 	}
 
+	authService := auth.NewService(store, auth.Options{})
+
+	needsSetup, err := authService.NeedsSetup(ctx)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("check setup state: %w", err)
+	}
+	if needsSetup {
+		log.Warn("no accounts exist yet, create the first administrator at POST /api/setup")
+	}
+
 	handler := httpapi.NewRouter(httpapi.Deps{
-		Log:       log,
-		Ready:     store.Ping,
-		Backend:   store.Backend(),
-		Ticket:    gateway.TicketHandler(),
+		Log:     log,
+		Ready:   store.Ping,
+		Backend: store.Backend(),
+		Auth: httpapi.AuthDeps{
+			Service:       authService,
+			Store:         store,
+			Tickets:       tickets,
+			SecureCookies: config.SecureCookies,
+		},
 		WebSocket: gateway.WebSocketHandler(),
 	})
 

@@ -12,37 +12,21 @@ import (
 	"github.com/coder/websocket"
 )
 
-func newTestGateway(t *testing.T, devTickets bool) (*Gateway, *httptest.Server) {
+func newTestGateway(t *testing.T) (*Gateway, *httptest.Server, *harness) {
 	t.Helper()
 
 	h := newHarness(t)
-	gateway := NewGateway(h.deps, devTickets)
+	gateway := NewGateway(h.deps)
+	gateway.AllowJSONFormat(true)
 	t.Cleanup(gateway.Close)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/session/ticket", gateway.TicketHandler())
 	mux.HandleFunc("GET /ws", gateway.WebSocketHandler())
 
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	return gateway, server
-}
-
-func TestTicketEndpointIsOffUnlessExplicitlyEnabled(t *testing.T) {
-	_, server := newTestGateway(t, false)
-
-	response, err := http.Post(server.URL+"/api/session/ticket", "application/json",
-		strings.NewReader(`{"userId":"user-1","worldId":"world-1"}`))
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusNotImplemented {
-		t.Errorf("status = %d, want %d: an unauthenticated ticket endpoint must not be reachable by default",
-			response.StatusCode, http.StatusNotImplemented)
-	}
+	return gateway, server, h
 }
 
 func wsURLFor(server *httptest.Server, codec Codec) string {
@@ -56,25 +40,14 @@ func wsURLFor(server *httptest.Server, codec Codec) string {
 func TestWebSocketRoundTripOverHTTP(t *testing.T) {
 	for _, codec := range []Codec{ProtoCodec{}, JSONCodec{}} {
 		t.Run(codec.Name(), func(t *testing.T) {
-			_, server := newTestGateway(t, true)
+			_, server, h := newTestGateway(t)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			response, err := http.Post(server.URL+"/api/session/ticket", "application/json",
-				strings.NewReader(`{"userId":"user-1","worldId":"world-1","role":"gm"}`))
+			ticket, _, err := h.tickets.Issue("user-1", testWorld, "gm")
 			if err != nil {
-				t.Fatalf("post: %v", err)
-			}
-			defer response.Body.Close()
-
-			if response.StatusCode != http.StatusOK {
-				t.Fatalf("ticket status = %d", response.StatusCode)
-			}
-
-			var issued ticketResponse
-			if err := json.NewDecoder(response.Body).Decode(&issued); err != nil {
-				t.Fatalf("decode ticket: %v", err)
+				t.Fatalf("issue ticket: %v", err)
 			}
 
 			conn, _, err := websocket.Dial(ctx, wsURLFor(server, codec), nil)
@@ -122,7 +95,7 @@ func TestWebSocketRoundTripOverHTTP(t *testing.T) {
 				Lane: LaneControl,
 				Type: TypeHello,
 				Hello: &Hello{
-					Ticket:          issued.Ticket,
+					Ticket:          ticket,
 					WorldID:         string(testWorld),
 					ProtocolVersion: ProtocolVersion,
 				},
@@ -176,11 +149,16 @@ func TestWebSocketRoundTripOverHTTP(t *testing.T) {
 }
 
 func TestJSONFormatIsRefusedWhenNotAllowed(t *testing.T) {
-	gateway, server := newTestGateway(t, true)
+	gateway, server, h := newTestGateway(t)
 	gateway.AllowJSONFormat(false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	ticket, _, err := h.tickets.Issue("user-1", testWorld, "gm")
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
 
 	conn, _, err := websocket.Dial(ctx, wsURLFor(server, JSONCodec{}), nil)
 	if err != nil {
@@ -191,7 +169,7 @@ func TestJSONFormatIsRefusedWhenNotAllowed(t *testing.T) {
 	data, _ := JSONCodec{}.Encode(Frame{
 		Lane:  LaneControl,
 		Type:  TypeHello,
-		Hello: &Hello{Ticket: "anything", ProtocolVersion: ProtocolVersion},
+		Hello: &Hello{Ticket: ticket, ProtocolVersion: ProtocolVersion},
 	})
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("write: %v", err)
@@ -207,7 +185,7 @@ func TestJSONFormatIsRefusedWhenNotAllowed(t *testing.T) {
 }
 
 func TestWebSocketRejectsMissingTicket(t *testing.T) {
-	_, server := newTestGateway(t, true)
+	_, server, _ := newTestGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

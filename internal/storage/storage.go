@@ -29,6 +29,28 @@ type World struct {
 	ArchivedAt    *time.Time
 }
 
+type User struct {
+	ID           ID
+	Username     string
+	Email        string
+	PasswordHash string
+	Locale       string
+	IsAdmin      bool
+	CreatedAt    time.Time
+	DisabledAt   *time.Time
+}
+
+func (u *User) Disabled() bool { return u.DisabledAt != nil }
+
+type UserSession struct {
+	TokenHash  string
+	UserID     ID
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	LastSeenAt time.Time
+	UserAgent  string
+}
+
 type Member struct {
 	WorldID  ID
 	UserID   ID
@@ -132,6 +154,10 @@ type JSONQuery struct {
 
 type Query interface {
 	GetWorld(ctx context.Context, id ID) (*World, error)
+	GetUser(ctx context.Context, id ID) (*User, error)
+	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	CountUsers(ctx context.Context) (int, error)
+	GetUserSession(ctx context.Context, tokenHash string) (*UserSession, error)
 	GetMember(ctx context.Context, worldID, userID ID) (*Member, error)
 	ListMembers(ctx context.Context, worldID ID) ([]Member, error)
 	GetDocument(ctx context.Context, worldID, id ID) (*Document, error)
@@ -144,6 +170,11 @@ type Tx interface {
 	Query
 
 	PutWorld(ctx context.Context, world *World) error
+	PutUser(ctx context.Context, user *User) error
+	PutUserSession(ctx context.Context, session *UserSession) error
+	TouchUserSession(ctx context.Context, tokenHash string, seenAt time.Time) error
+	DeleteUserSession(ctx context.Context, tokenHash string) error
+	DeleteUserSessionsOf(ctx context.Context, userID ID) error
 	PutMember(ctx context.Context, member *Member) error
 	PutDocument(ctx context.Context, doc *Document) error
 	PatchDocument(ctx context.Context, worldID, id ID, patch Patch) (*Document, error)

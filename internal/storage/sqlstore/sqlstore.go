@@ -179,6 +179,28 @@ func parseTimeInto(raw string, dst *time.Time) error {
 	return fmt.Errorf("storage: cannot parse time %q", raw)
 }
 
+type boolScanner struct {
+	dst *bool
+}
+
+func (s boolScanner) Scan(value any) error {
+	switch typed := value.(type) {
+	case nil:
+		*s.dst = false
+	case bool:
+		*s.dst = typed
+	case int64:
+		*s.dst = typed != 0
+	case []byte:
+		*s.dst = len(typed) == 1 && (typed[0] == 't' || typed[0] == '1')
+	case string:
+		*s.dst = typed == "t" || typed == "true" || typed == "1"
+	default:
+		return fmt.Errorf("storage: cannot scan %T as bool", value)
+	}
+	return nil
+}
+
 type jsonScanner struct {
 	dst      *json.RawMessage
 	fallback string

@@ -169,5 +169,27 @@ func (dialect) Migrations() [][]string {
 				PRIMARY KEY (world_id, user_id)
 			)`,
 		},
+		{
+			`CREATE TABLE users (
+				id            TEXT PRIMARY KEY,
+				username      TEXT NOT NULL UNIQUE,
+				email         TEXT UNIQUE,
+				password_hash TEXT NOT NULL DEFAULT '',
+				locale        TEXT NOT NULL DEFAULT '',
+				is_admin      INTEGER NOT NULL DEFAULT 0,
+				created_at    TEXT NOT NULL,
+				disabled_at   TEXT
+			)`,
+			`CREATE TABLE user_sessions (
+				token_hash   TEXT PRIMARY KEY,
+				user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				created_at   TEXT NOT NULL,
+				expires_at   TEXT NOT NULL,
+				last_seen_at TEXT NOT NULL,
+				user_agent   TEXT NOT NULL DEFAULT ''
+			)`,
+			`CREATE INDEX user_sessions_user_idx ON user_sessions (user_id)`,
+			`CREATE INDEX user_sessions_expiry_idx ON user_sessions (expires_at)`,
+		},
 	}
 }
