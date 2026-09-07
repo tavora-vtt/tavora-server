@@ -28,6 +28,27 @@ func drainRaw(t *testing.T, conn *fakeConn, within time.Duration) []byte {
 	}
 }
 
+func drainUntil(t *testing.T, conn *fakeConn, marker string, within time.Duration) string {
+	t.Helper()
+
+	var collected bytes.Buffer
+	deadline := time.After(within)
+
+	for {
+		select {
+		case data := <-conn.outgoing:
+			collected.Write(data)
+			collected.WriteByte('\n')
+			if strings.Contains(collected.String(), marker) {
+				return collected.String()
+			}
+		case <-deadline:
+			t.Fatalf("never saw %q on the wire, collected:\n%s", marker, collected.String())
+			return ""
+		}
+	}
+}
+
 func patchAs(t *testing.T, conn *fakeConn, requestID uint32, set map[string]any) {
 	t.Helper()
 
@@ -49,10 +70,9 @@ func TestGMOnlyFieldNeverReachesAPlayerSocket(t *testing.T) {
 	player, _ := h.connect(t, "user-2", 0)
 
 	patchAs(t, gm, 1, map[string]any{"hunger": 4})
-	gm.nextOfType(t, TypeAck)
 
-	gmBytes := string(drainRaw(t, gm, 300*time.Millisecond))
-	playerBytes := string(drainRaw(t, player, 300*time.Millisecond))
+	gmBytes := drainUntil(t, gm, `"type":"ack"`, waitFor)
+	playerBytes := drainUntil(t, player, `"hunger"`, waitFor)
 
 	if !strings.Contains(gmBytes, "secrets") {
 		t.Error("the gm should see the secret field")
