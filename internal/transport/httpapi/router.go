@@ -11,9 +11,11 @@ import (
 type ReadinessCheck func(ctx context.Context) error
 
 type Deps struct {
-	Log     *slog.Logger
-	Ready   ReadinessCheck
-	Backend string
+	Log       *slog.Logger
+	Ready     ReadinessCheck
+	Backend   string
+	Ticket    http.HandlerFunc
+	WebSocket http.HandlerFunc
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -42,6 +44,13 @@ func NewRouter(deps Deps) http.Handler {
 			"storage": deps.Backend,
 		})
 	})
+
+	if deps.Ticket != nil {
+		mux.HandleFunc("POST /api/session/ticket", deps.Ticket)
+	}
+	if deps.WebSocket != nil {
+		mux.HandleFunc("GET /ws", deps.WebSocket)
+	}
 
 	return withRequestLog(deps.Log, mux)
 }

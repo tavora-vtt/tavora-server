@@ -3,6 +3,7 @@ module github.com/tavora-vtt/tavora-server
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/jackc/pgx/v5 v5.10.0
 	modernc.org/sqlite v1.58.0
 )

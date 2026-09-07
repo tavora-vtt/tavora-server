@@ -18,6 +18,7 @@ curl localhost:30000/readyz
 | `TAVORA_SERVER_BIND` | `0.0.0.0:30000` | Listen address |
 | `TAVORA_STORAGE_DRIVER` | `sqlite` | `sqlite` or `postgres` |
 | `TAVORA_STORAGE_DSN` | `data/tavora.db` | File path, or a PostgreSQL connection string |
+| `TAVORA_DEV_UNSAFE_TICKETS` | unset | `1` opens an unauthenticated ticket endpoint. Development only |
 
 The default install has no external dependency: SQLite through a cgo-free driver, so the
 static binary from [ADR 0001](https://github.com/tavora-vtt/tavora-docs/blob/main/adr/0001-server-language.md)
@@ -60,10 +61,43 @@ Setting `TAVORA_TEST_REQUIRE_POSTGRES=1` turns a missing DSN into a failure rath
 skip. CI sets it, so a broken service container cannot quietly halve the coverage that
 ADR 0002 depends on.
 
+## Realtime gateway
+
+`internal/transport/ws` implements the protocol from
+[concept doc 04](https://github.com/tavora-vtt/tavora-docs/blob/main/concept/04-realtime-protocol.md):
+one socket, three lanes, per-world hub.
+
+| Lane | Carries | Under pressure |
+| --- | --- | --- |
+| Control | Handshake, errors, ping, resync | Never dropped |
+| Document | Intents, acks, events | Queued, then the session is closed with a resync instruction |
+| Ephemeral | Cursors, drag previews | Coalesced by key, newest wins |
+
+A client connects by exchanging a short-lived single-use ticket over HTTP, then sends
+`hello` with the sequence it last saw. The session joins the hub **before** the welcome is
+written, so nothing published in between is lost; the replay is prepended ahead of anything
+that arrived during catch-up, and the writer drops any event whose sequence it has already
+sent.
+
+The ticket endpoint is closed by default and returns 501. `TAVORA_DEV_UNSAFE_TICKETS=1`
+opens it and logs a warning at startup, because until authentication lands in M1 it would
+hand a session to anyone who asks.
+
+`document.patch` is the first real intent and runs the whole path from
+[concept doc 02](https://github.com/tavora-vtt/tavora-docs/blob/main/concept/02-architecture.md):
+authorize, apply, append the event, fan out. Authorization currently goes through
+`AllowAllAuthorizer`, which is deliberately named so it is greppable and cannot be mistaken
+for a permission model. The real one arrives with M1.
+
+The wire format is a `Codec` interface with a JSON implementation. The Protobuf codec from
+`tavora-protocol` slots in behind the same interface once that module is reachable from a
+clean clone.
+
 ## Status
 
-Milestone M0. HTTP surface, graceful shutdown, and the storage port with both backends are
-in place. The WebSocket gateway and the world hub land next.
+Milestone M0. HTTP surface, graceful shutdown, the storage port with both backends, and the
+WebSocket gateway with lanes, backpressure and reconnect catch-up are in place. The scene
+model and permissions land next.
 
 ## Licence
 

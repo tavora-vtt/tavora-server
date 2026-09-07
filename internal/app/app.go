@@ -13,6 +13,7 @@ import (
 	"github.com/tavora-vtt/tavora-server/internal/storage/postgres"
 	"github.com/tavora-vtt/tavora-server/internal/storage/sqlite"
 	"github.com/tavora-vtt/tavora-server/internal/transport/httpapi"
+	"github.com/tavora-vtt/tavora-server/internal/transport/ws"
 )
 
 const (
@@ -28,6 +29,7 @@ type Config struct {
 	Bind            string
 	StorageDriver   string
 	StorageDSN      string
+	DevTickets      bool
 	ShutdownTimeout time.Duration
 }
 
@@ -47,14 +49,18 @@ func ConfigFromEnv() Config {
 	if value := os.Getenv("TAVORA_STORAGE_DSN"); value != "" {
 		config.StorageDSN = value
 	}
+	if os.Getenv("TAVORA_DEV_UNSAFE_TICKETS") == "1" {
+		config.DevTickets = true
+	}
 	return config
 }
 
 type App struct {
-	config Config
-	log    *slog.Logger
-	store  storage.Store
-	server *http.Server
+	config  Config
+	log     *slog.Logger
+	store   storage.Store
+	gateway *ws.Gateway
+	server  *http.Server
 }
 
 func New(config Config, log *slog.Logger) (*App, error) {
@@ -72,16 +78,34 @@ func New(config Config, log *slog.Logger) (*App, error) {
 	}
 	log.Info("storage ready", "backend", store.Backend())
 
+	router := ws.NewRouter()
+	ws.RegisterCoreIntents(router)
+
+	gateway := ws.NewGateway(ws.Deps{
+		Store:    store,
+		Registry: ws.NewRegistry(log),
+		Tickets:  ws.NewTicketStore(ws.DefaultTicketTTL),
+		Router:   router,
+		Log:      log,
+	}, config.DevTickets)
+
+	if config.DevTickets {
+		log.Warn("unauthenticated development tickets are enabled, never do this in production")
+	}
+
 	handler := httpapi.NewRouter(httpapi.Deps{
-		Log:     log,
-		Ready:   store.Ping,
-		Backend: store.Backend(),
+		Log:       log,
+		Ready:     store.Ping,
+		Backend:   store.Backend(),
+		Ticket:    gateway.TicketHandler(),
+		WebSocket: gateway.WebSocketHandler(),
 	})
 
 	return &App{
-		config: config,
-		log:    log,
-		store:  store,
+		config:  config,
+		log:     log,
+		store:   store,
+		gateway: gateway,
 		server: &http.Server{
 			Addr:              config.Bind,
 			Handler:           handler,
@@ -112,6 +136,7 @@ func (a *App) Store() storage.Store {
 
 func (a *App) Run(ctx context.Context) error {
 	defer func() {
+		a.gateway.Close()
 		if err := a.store.Close(); err != nil {
 			a.log.Error("closing storage", "error", err)
 		}
