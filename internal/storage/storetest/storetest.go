@@ -25,6 +25,8 @@ func Run(t *testing.T, newStore Factory) {
 		{"UserRoundTrip", testUserRoundTrip},
 		{"UserSessionLifecycle", testUserSessionLifecycle},
 		{"DeletingAUserRemovesItsSessions", testUserCascade},
+		{"WorldListings", testWorldListings},
+		{"InviteLifecycle", testInviteLifecycle},
 		{"MissingMemberIsNotFound", testMissingMemberIsNotFound},
 		{"DocumentRoundTrip", testDocumentRoundTrip},
 		{"UpsertPreservesCreatedAt", testUpsertPreservesCreatedAt},
@@ -932,6 +934,157 @@ func testUserCascade(t *testing.T, store storage.Store) {
 		})
 		if !errors.Is(err, storage.ErrNotFound) {
 			t.Errorf("%s survived: %v", hash, err)
+		}
+	}
+}
+
+func testWorldListings(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+
+	err := store.Tx(ctx, func(tx storage.Tx) error {
+		if err := tx.PutWorld(ctx, &storage.World{
+			ID: "world-2", Slug: "second", Title: "Another Table",
+			SystemID: "dnd5e", SystemVersion: "0.0.0",
+		}); err != nil {
+			return err
+		}
+		return tx.PutMember(ctx, &storage.Member{
+			WorldID: worldID, UserID: "user-1", Role: "gm",
+		})
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var all, mine []storage.World
+	if err := store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		if all, readErr = q.ListWorlds(ctx); readErr != nil {
+			return readErr
+		}
+		mine, readErr = q.ListWorldsForUser(ctx, "user-1")
+		return readErr
+	}); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if len(all) != 2 {
+		t.Errorf("all worlds = %d, want 2", len(all))
+	}
+	if len(mine) != 1 || mine[0].ID != worldID {
+		t.Errorf("worlds for user-1 = %+v", mine)
+	}
+
+	if err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.DeleteMember(ctx, worldID, "user-1")
+	}); err != nil {
+		t.Fatalf("delete member: %v", err)
+	}
+
+	_ = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		mine, readErr = q.ListWorldsForUser(ctx, "user-1")
+		return readErr
+	})
+	if len(mine) != 0 {
+		t.Errorf("removed member still sees %d worlds", len(mine))
+	}
+
+	err = store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.DeleteMember(ctx, worldID, "user-1")
+	})
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("removing a missing member returned %v, want ErrNotFound", err)
+	}
+}
+
+func testInviteLifecycle(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+	expires := time.Now().UTC().Add(time.Hour)
+
+	invite := &storage.Invite{
+		ID: "invite-1", TokenHash: "hash-1", WorldID: worldID, Role: "player",
+		CreatedBy: "user-1", ExpiresAt: expires, MaxUses: 2,
+	}
+	if err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutInvite(ctx, invite)
+	}); err != nil {
+		t.Fatalf("put invite: %v", err)
+	}
+
+	var loaded *storage.Invite
+	if err := store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		loaded, readErr = q.GetInviteByTokenHash(ctx, "hash-1")
+		return readErr
+	}); err != nil {
+		t.Fatalf("get invite: %v", err)
+	}
+	if loaded.Role != "player" || loaded.MaxUses != 2 || loaded.Uses != 0 {
+		t.Errorf("invite = %+v", loaded)
+	}
+	if !loaded.Usable(time.Now().UTC()) {
+		t.Error("a fresh invite is not usable")
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := store.Tx(ctx, func(tx storage.Tx) error {
+			return tx.ConsumeInvite(ctx, worldID, "invite-1")
+		}); err != nil {
+			t.Fatalf("consume %d: %v", attempt, err)
+		}
+	}
+
+	err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.ConsumeInvite(ctx, worldID, "invite-1")
+	})
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("a spent invite was consumed again: %v", err)
+	}
+
+	unlimited := &storage.Invite{
+		ID: "invite-2", TokenHash: "hash-2", WorldID: worldID, Role: "observer",
+		CreatedBy: "user-1", ExpiresAt: expires,
+	}
+	if err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutInvite(ctx, unlimited)
+	}); err != nil {
+		t.Fatalf("put unlimited invite: %v", err)
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := store.Tx(ctx, func(tx storage.Tx) error {
+			return tx.ConsumeInvite(ctx, worldID, "invite-2")
+		}); err != nil {
+			t.Fatalf("unlimited consume %d: %v", attempt, err)
+		}
+	}
+
+	if err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.RevokeInvite(ctx, worldID, "invite-2")
+	}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	err = store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.ConsumeInvite(ctx, worldID, "invite-2")
+	})
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("a revoked invite was consumed: %v", err)
+	}
+
+	var invites []storage.Invite
+	_ = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		invites, readErr = q.ListInvites(ctx, worldID)
+		return readErr
+	})
+	if len(invites) != 2 {
+		t.Errorf("listed %d invites, want 2", len(invites))
+	}
+	for _, entry := range invites {
+		if entry.ID == "invite-2" && entry.RevokedAt == nil {
+			t.Error("revocation not recorded")
 		}
 	}
 }

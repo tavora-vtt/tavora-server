@@ -190,5 +190,20 @@ func (dialect) Migrations() [][]string {
 			`CREATE INDEX user_sessions_user_idx ON user_sessions (user_id)`,
 			`CREATE INDEX user_sessions_expiry_idx ON user_sessions (expires_at)`,
 		},
+		{
+			`CREATE TABLE invites (
+				id         TEXT PRIMARY KEY,
+				token_hash TEXT NOT NULL UNIQUE,
+				world_id   TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+				role       TEXT NOT NULL,
+				created_by TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL,
+				expires_at TIMESTAMPTZ NOT NULL,
+				max_uses   INTEGER NOT NULL DEFAULT 0,
+				uses       INTEGER NOT NULL DEFAULT 0,
+				revoked_at TIMESTAMPTZ
+			)`,
+			`CREATE INDEX invites_world_idx ON invites (world_id)`,
+		},
 	}
 }

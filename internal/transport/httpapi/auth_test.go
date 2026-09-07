@@ -43,7 +43,7 @@ func newAuthHarness(t *testing.T) *authHarness {
 
 	err = store.Tx(ctx, func(tx storage.Tx) error {
 		return tx.PutWorld(ctx, &storage.World{
-			ID: testWorld, Slug: "blood-and-rain", Title: "Blood and Rain",
+			ID: testWorld, Slug: "seeded-world", Title: "Seeded World",
 			SystemID: "wod5e", SystemVersion: "0.0.0",
 		})
 	})

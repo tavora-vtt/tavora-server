@@ -121,6 +121,41 @@ The ticket endpoint needs a signed-in user and a membership in the requested wor
 stamps the role the world records. A server administrator who is not a member of a world
 gets a 403.
 
+## Worlds and joining
+
+| Route | Who | Does |
+| --- | --- | --- |
+| `POST /api/worlds` | Any signed-in user | Create a world, the creator becomes its game master |
+| `GET /api/worlds` | Any signed-in user | The worlds you are a member of, with your role |
+| `GET /api/worlds/{id}/members` | Members | Who is in the world |
+| `PUT /api/worlds/{id}/members/{userId}` | Game master | Change a role |
+| `DELETE /api/worlds/{id}/members/{userId}` | Game master | Remove a member |
+| `POST /api/worlds/{id}/invites` | Game master | Create an invite link |
+| `GET /api/worlds/{id}/invites` | Game master | List invites and their use counts |
+| `DELETE /api/worlds/{id}/invites/{inviteId}` | Game master | Revoke an invite |
+| `GET /api/invites/{token}` | Anyone | Preview: world title, role, whether it is still valid |
+| `POST /api/invites/{token}/accept` | Anyone | Join, creating an account if needed |
+
+Invite tokens are stored hashed, like session tokens, and the plaintext is returned exactly
+once to the game master who created it.
+
+**A password is optional when accepting an invite.** Doc 10 puts it plainly: most players
+should never have a password on this server. Accepting creates the account, issues the
+session cookie, and that cookie is the credential. An account with no password cannot sign
+in through the login route at all, which the service already enforced before this feature
+existed.
+
+Accepting is one transaction: the account, the membership and the use count either all
+land or none do. A test drives a single-use invite twice and asserts that the second
+attempt leaves no orphan account behind.
+
+A game master cannot demote or remove themselves, because a world with no game master
+cannot be repaired through the API.
+
+Slugs are derived from the title when none is given, and a derived slug that collides gets
+a numeric suffix rather than an error. A slug the user typed and that is taken is a 409,
+because they chose it.
+
 ## Permissions
 
 `internal/core/perm` is the pure part: roles, ownership levels, field visibility, and one
@@ -163,8 +198,8 @@ type. A cursor frame is 62 bytes as Protobuf and 147 as JSON.
 
 M0 is complete and M1 is under way. HTTP surface, graceful shutdown, the storage port with
 both backends, the WebSocket gateway with lanes, backpressure and reconnect catch-up,
-authentication, and the permission model with field-level redaction are in place. World and
-membership management, then the scene model, land next.
+authentication, world and membership management with invite links, and the permission model
+with field-level redaction are in place. The scene model lands next.
 
 ## Licence
 

@@ -52,6 +52,18 @@ func NewRouter(deps Deps) http.Handler {
 		mux.HandleFunc("POST /api/auth/logout", deps.Auth.logoutHandler())
 		mux.HandleFunc("GET /api/auth/me", deps.Auth.meHandler())
 		mux.HandleFunc("POST /api/session/ticket", deps.Auth.ticketHandler())
+
+		mux.HandleFunc("GET /api/worlds", deps.Auth.listWorldsHandler())
+		mux.HandleFunc("POST /api/worlds", deps.Auth.createWorldHandler())
+		mux.HandleFunc("GET /api/worlds/{worldId}/members", deps.Auth.listMembersHandler())
+		mux.HandleFunc("PUT /api/worlds/{worldId}/members/{userId}", deps.Auth.setMemberRoleHandler())
+		mux.HandleFunc("DELETE /api/worlds/{worldId}/members/{userId}", deps.Auth.removeMemberHandler())
+		mux.HandleFunc("GET /api/worlds/{worldId}/invites", deps.Auth.listInvitesHandler())
+		mux.HandleFunc("POST /api/worlds/{worldId}/invites", deps.Auth.createInviteHandler())
+		mux.HandleFunc("DELETE /api/worlds/{worldId}/invites/{inviteId}", deps.Auth.revokeInviteHandler())
+
+		mux.HandleFunc("GET /api/invites/{token}", deps.Auth.previewInviteHandler())
+		mux.HandleFunc("POST /api/invites/{token}/accept", deps.Auth.acceptInviteHandler())
 	}
 	if deps.WebSocket != nil {
 		mux.HandleFunc("GET /ws", deps.WebSocket)

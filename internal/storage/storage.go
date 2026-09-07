@@ -58,6 +58,26 @@ type Member struct {
 	JoinedAt time.Time
 }
 
+type Invite struct {
+	ID        ID
+	TokenHash string
+	WorldID   ID
+	Role      string
+	CreatedBy ID
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	MaxUses   int
+	Uses      int
+	RevokedAt *time.Time
+}
+
+func (i *Invite) Usable(now time.Time) bool {
+	if i.RevokedAt != nil || now.After(i.ExpiresAt) {
+		return false
+	}
+	return i.MaxUses == 0 || i.Uses < i.MaxUses
+}
+
 type Document struct {
 	WorldID       ID
 	ID            ID
@@ -160,6 +180,10 @@ type Query interface {
 	GetUserSession(ctx context.Context, tokenHash string) (*UserSession, error)
 	GetMember(ctx context.Context, worldID, userID ID) (*Member, error)
 	ListMembers(ctx context.Context, worldID ID) ([]Member, error)
+	ListWorlds(ctx context.Context) ([]World, error)
+	ListWorldsForUser(ctx context.Context, userID ID) ([]World, error)
+	GetInviteByTokenHash(ctx context.Context, tokenHash string) (*Invite, error)
+	ListInvites(ctx context.Context, worldID ID) ([]Invite, error)
 	GetDocument(ctx context.Context, worldID, id ID) (*Document, error)
 	ListDocuments(ctx context.Context, worldID ID, filter DocumentFilter) ([]*Document, error)
 	QuerySystemData(ctx context.Context, worldID ID, query JSONQuery) ([]*Document, error)
@@ -176,6 +200,10 @@ type Tx interface {
 	DeleteUserSession(ctx context.Context, tokenHash string) error
 	DeleteUserSessionsOf(ctx context.Context, userID ID) error
 	PutMember(ctx context.Context, member *Member) error
+	DeleteMember(ctx context.Context, worldID, userID ID) error
+	PutInvite(ctx context.Context, invite *Invite) error
+	ConsumeInvite(ctx context.Context, worldID, id ID) error
+	RevokeInvite(ctx context.Context, worldID, id ID) error
 	PutDocument(ctx context.Context, doc *Document) error
 	PatchDocument(ctx context.Context, worldID, id ID, patch Patch) (*Document, error)
 	DeleteDocument(ctx context.Context, worldID, id ID, mode DeleteMode) error
