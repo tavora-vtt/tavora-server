@@ -1,0 +1,155 @@
+package ws
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tavora-vtt/tavora-server/internal/storage"
+)
+
+func seedWalledScene(t *testing.T, h *harness) {
+	t.Helper()
+	ctx := context.Background()
+
+	err := h.store.Tx(ctx, func(tx storage.Tx) error {
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "scene-1", Kind: "scene", Name: "Chantry",
+			Data:      json.RawMessage(`{"width":1000,"height":800,"gridSize":100}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		}); err != nil {
+			return err
+		}
+
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "wall-1", Kind: "wall", ParentID: "scene-1", Name: "Wall",
+			Data:      json.RawMessage(`{"x1":5,"y1":0,"x2":5,"y2":20,"blocksSight":true}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		}); err != nil {
+			return err
+		}
+
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "own-token", Kind: "token", ParentID: "scene-1", Name: "Nadia",
+			Data:      json.RawMessage(`{"x":1,"y":5,"disposition":"friendly"}`),
+			Ownership: json.RawMessage(`{"user-2":"owner"}`),
+		}); err != nil {
+			return err
+		}
+
+		return tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "far-token", Kind: "token", ParentID: "scene-1", Name: "Sheriff",
+			Data:      json.RawMessage(`{"x":9,"y":5,"disposition":"hostile"}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		})
+	})
+	if err != nil {
+		t.Fatalf("seed walled scene: %v", err)
+	}
+}
+
+func moveToken(t *testing.T, conn *fakeConn, requestID uint32, id string, x, y float64) {
+	t.Helper()
+
+	payload, _ := json.Marshal(TokenMovePayload{TokenID: id, X: x, Y: y})
+	conn.send(t, Frame{
+		Lane:   LaneDocument,
+		Type:   TypeIntent,
+		Intent: &Intent{RequestID: requestID, Kind: "scene.token.move", Payload: payload},
+	})
+}
+
+func TestATokenBehindAWallIsNotSentToThePlayer(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	player, _ := h.connect(t, "user-2", 0)
+
+	moveToken(t, gm, 1, "far-token", 9, 6)
+	gm.nextOfType(t, TypeAck)
+
+	raw := string(drainRaw(t, player, 400*time.Millisecond))
+	if strings.Contains(raw, "far-token") || strings.Contains(raw, "Sheriff") {
+		t.Errorf("a token behind a wall reached the player socket:\n%s", raw)
+	}
+}
+
+func TestTheSameTokenArrivesOnceItStepsIntoView(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	player, _ := h.connect(t, "user-2", 0)
+
+	moveToken(t, gm, 1, "far-token", 2, 5)
+	gm.nextOfType(t, TypeAck)
+
+	raw := drainUntil(t, player, "far-token", waitFor)
+	if !strings.Contains(raw, "Sheriff") {
+		t.Errorf("the token stepped onto the player's side but did not arrive:\n%s", raw)
+	}
+}
+
+func TestTheGameMasterAlwaysSeesTheMove(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	watcher, _ := h.connect(t, "user-3", 0)
+
+	moveToken(t, gm, 1, "far-token", 9, 7)
+
+	raw := drainUntil(t, gm, "far-token", waitFor)
+	if !strings.Contains(raw, "Sheriff") {
+		t.Errorf("the game master did not receive their own move:\n%s", raw)
+	}
+
+	_ = watcher
+}
+
+func TestAViewerWithoutATokenIsNotBlinded(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	watcher, _ := h.connect(t, "user-3", 0)
+
+	moveToken(t, gm, 1, "far-token", 9, 7)
+	gm.nextOfType(t, TypeAck)
+
+	raw := drainUntil(t, watcher, "far-token", waitFor)
+	if !strings.Contains(raw, "Sheriff") {
+		t.Errorf("a viewer with no token on the scene was blinded:\n%s", raw)
+	}
+}
+
+func TestAnOpenDoorLetsSightThrough(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+	ctx := context.Background()
+
+	err := h.store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "wall-1", Kind: "wall", ParentID: "scene-1", Name: "Door",
+			Data:      json.RawMessage(`{"x1":5,"y1":0,"x2":5,"y2":20,"blocksSight":true,"door":true,"doorOpen":true}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		})
+	})
+	if err != nil {
+		t.Fatalf("open the door: %v", err)
+	}
+
+	gm, _ := h.connect(t, "user-1", 0)
+	player, _ := h.connect(t, "user-2", 0)
+
+	moveToken(t, gm, 1, "far-token", 9, 6)
+	gm.nextOfType(t, TypeAck)
+
+	raw := drainUntil(t, player, "far-token", waitFor)
+	if !strings.Contains(raw, "Sheriff") {
+		t.Errorf("an open door still blocked sight:\n%s", raw)
+	}
+}

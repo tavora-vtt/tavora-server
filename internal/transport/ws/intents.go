@@ -220,6 +220,11 @@ func applyPatch(
 		}
 
 		views, err = session.Access().ProjectForMembers(ctx, tx, patched)
+		if err != nil {
+			return err
+		}
+
+		views, err = withinSight(ctx, tx, session.Access(), session.WorldID(), patched, views)
 		return err
 	})
 

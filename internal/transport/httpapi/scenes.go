@@ -15,6 +15,7 @@ const (
 	KindScene = "scene"
 	KindToken = "token"
 	KindActor = "actor"
+	KindWall  = "wall"
 )
 
 type SceneData struct {
@@ -424,21 +425,21 @@ func (d AuthDeps) createActorHandler() http.HandlerFunc {
 	}
 }
 
-type actorAccessRequest struct {
+type documentAccessRequest struct {
 	UserID string `json:"userId"`
 	Level  string `json:"level"`
 }
 
-func (d AuthDeps) setActorAccessHandler() http.HandlerFunc {
+func (d AuthDeps) setDocumentAccessHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		worldID := storage.ID(r.PathValue("worldId"))
-		actorID := storage.ID(r.PathValue("actorId"))
+		documentID := storage.ID(r.PathValue("documentId"))
 
 		if _, ok := d.requireRole(w, r, worldID, true); !ok {
 			return
 		}
 
-		var body actorAccessRequest
+		var body documentAccessRequest
 		if !decodeBody(w, r, &body) {
 			return
 		}
@@ -449,7 +450,7 @@ func (d AuthDeps) setActorAccessHandler() http.HandlerFunc {
 		}
 
 		err = d.Store.Tx(r.Context(), func(tx storage.Tx) error {
-			document, err := tx.GetDocument(r.Context(), worldID, actorID)
+			document, err := tx.GetDocument(r.Context(), worldID, documentID)
 			if err != nil {
 				return err
 			}
@@ -473,7 +474,7 @@ func (d AuthDeps) setActorAccessHandler() http.HandlerFunc {
 			return tx.PutDocument(r.Context(), document)
 		})
 		if errors.Is(err, storage.ErrNotFound) {
-			writeJSON(w, http.StatusNotFound, apiError{Code: "not_found", MessageKey: "core.actor.unknown"})
+			writeJSON(w, http.StatusNotFound, apiError{Code: "not_found", MessageKey: "core.document.unknown"})
 			return
 		}
 		if err != nil {
@@ -482,5 +483,133 @@ func (d AuthDeps) setActorAccessHandler() http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type WallData struct {
+	X1          float64 `json:"x1"`
+	Y1          float64 `json:"y1"`
+	X2          float64 `json:"x2"`
+	Y2          float64 `json:"y2"`
+	BlocksSight bool    `json:"blocksSight"`
+	BlocksMove  bool    `json:"blocksMovement"`
+	BlocksSound bool    `json:"blocksSound"`
+	Door        bool    `json:"door"`
+	DoorOpen    bool    `json:"doorOpen"`
+}
+
+type wallView struct {
+	ID   string   `json:"id"`
+	Data WallData `json:"data"`
+}
+
+type createWallRequest struct {
+	X1          float64 `json:"x1"`
+	Y1          float64 `json:"y1"`
+	X2          float64 `json:"x2"`
+	Y2          float64 `json:"y2"`
+	Door        bool    `json:"door"`
+	BlocksSight *bool   `json:"blocksSight,omitempty"`
+}
+
+func (d AuthDeps) listWallsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		worldID := storage.ID(r.PathValue("worldId"))
+		sceneID := storage.ID(r.PathValue("sceneId"))
+
+		if _, ok := d.requireRole(w, r, worldID, false); !ok {
+			return
+		}
+
+		var views []wallView
+		err := d.Store.ReadOnly(r.Context(), func(q storage.Query) error {
+			parent := sceneID
+			documents, err := q.ListDocuments(r.Context(), worldID, storage.DocumentFilter{
+				Kind:     KindWall,
+				ParentID: &parent,
+			})
+			if err != nil {
+				return err
+			}
+			views = make([]wallView, 0, len(documents))
+			for _, document := range documents {
+				var data WallData
+				_ = json.Unmarshal(document.Data, &data)
+				views = append(views, wallView{ID: string(document.ID), Data: data})
+			}
+			return nil
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{Code: "internal", MessageKey: "core.api.internalError"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, views)
+	}
+}
+
+func (d AuthDeps) createWallHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		worldID := storage.ID(r.PathValue("worldId"))
+		sceneID := storage.ID(r.PathValue("sceneId"))
+
+		if _, ok := d.requireRole(w, r, worldID, true); !ok {
+			return
+		}
+
+		var body createWallRequest
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if body.X1 == body.X2 && body.Y1 == body.Y2 {
+			writeJSON(w, http.StatusBadRequest, apiError{
+				Code: "bad_request", MessageKey: "core.scene.wallHasNoLength",
+			})
+			return
+		}
+
+		blocksSight := true
+		if body.BlocksSight != nil {
+			blocksSight = *body.BlocksSight
+		}
+
+		data, err := json.Marshal(WallData{
+			X1: body.X1, Y1: body.Y1, X2: body.X2, Y2: body.Y2,
+			BlocksSight: blocksSight, BlocksMove: true, BlocksSound: !body.Door,
+			Door: body.Door,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{Code: "internal", MessageKey: "core.api.internalError"})
+			return
+		}
+
+		document := &storage.Document{
+			WorldID:   worldID,
+			ID:        auth.GenerateID("wall"),
+			Kind:      KindWall,
+			ParentID:  sceneID,
+			Name:      "Wall",
+			Data:      data,
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		}
+
+		err = d.Store.Tx(r.Context(), func(tx storage.Tx) error {
+			if _, err := tx.GetDocument(r.Context(), worldID, sceneID); err != nil {
+				return err
+			}
+			return tx.PutDocument(r.Context(), document)
+		})
+		if errors.Is(err, storage.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, apiError{Code: "not_found", MessageKey: "core.scene.unknown"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{Code: "internal", MessageKey: "core.api.internalError"})
+			return
+		}
+
+		var view WallData
+		_ = json.Unmarshal(document.Data, &view)
+		writeJSON(w, http.StatusCreated, wallView{ID: string(document.ID), Data: view})
 	}
 }

@@ -168,6 +168,26 @@ whole path for free: authorization, the event log, per-recipient redaction and l
 fan-out. `canEdit` on the listing is the resolved grant, not a guess, and the server
 refuses a patch from someone who only has read access regardless of what the client shows.
 
+## Walls and line of sight
+
+Walls belong to a scene and carry `blocksSight`, `blocksMovement`, `blocksSound` and a door
+flag. `internal/core/vision` is the geometry: segment intersection, no I/O, seven tests.
+
+**A token a player cannot see is not sent to that player.** When a token moves, fan-out
+resolves each recipient's viewpoints, meaning the tokens they own on that scene, and drops
+the recipient entirely if no viewpoint has a clear line to the target. The client cannot
+reveal what it was never told, which is the property
+[concept doc 04](https://github.com/tavora-vtt/tavora-docs/blob/main/concept/04-realtime-protocol.md)
+asks for and the one a client-side fog of war cannot provide.
+
+Three rules keep it from being punitive. Staff always see everything. A scene with no
+sight-blocking walls filters nothing. And a viewer who owns no token on the scene is not
+blinded, because they have no viewpoint to reason from; they watch like an observer. Each
+has a test, as does an open door letting sight through.
+
+This is the conservative server-side check doc 04 describes, not the client's rendering.
+The pretty per-pixel fog stays a client concern and is still to come.
+
 ## Combat
 
 `combat.start` gathers the tokens on a scene, rolls initiative for each and stores the
