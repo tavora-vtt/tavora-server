@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -8,24 +10,54 @@ import (
 	"testing"
 )
 
-func TestHealthEndpoints(t *testing.T) {
-	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)))
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
-	for _, path := range []string{"/healthz", "/readyz"} {
-		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+func TestHealthIsIndependentOfStorage(t *testing.T) {
+	router := NewRouter(Deps{
+		Log:     discardLogger(),
+		Ready:   func(context.Context) error { return errors.New("storage down") },
+		Backend: "sqlite",
+	})
 
-		if recorder.Code != http.StatusOK {
-			t.Errorf("%s returned %d, want %d", path, recorder.Code, http.StatusOK)
-		}
-		if got := recorder.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
-			t.Errorf("%s content type is %q", path, got)
-		}
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Errorf("healthz returned %d while storage was down, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+func TestReadinessFollowsStorage(t *testing.T) {
+	tests := []struct {
+		name  string
+		ready ReadinessCheck
+		want  int
+	}{
+		{"available", func(context.Context) error { return nil }, http.StatusOK},
+		{"unavailable", func(context.Context) error { return errors.New("no connection") }, http.StatusServiceUnavailable},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			router := NewRouter(Deps{Log: discardLogger(), Ready: test.ready, Backend: "sqlite"})
+
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+			if recorder.Code != test.want {
+				t.Errorf("readyz returned %d, want %d", recorder.Code, test.want)
+			}
+			if got := recorder.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+				t.Errorf("content type is %q", got)
+			}
+		})
 	}
 }
 
 func TestUnknownPathIsNotFound(t *testing.T) {
-	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	router := NewRouter(Deps{Log: discardLogger()})
 
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/nope", nil))

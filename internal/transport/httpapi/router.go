@@ -1,13 +1,22 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
 )
 
-func NewRouter(log *slog.Logger) http.Handler {
+type ReadinessCheck func(ctx context.Context) error
+
+type Deps struct {
+	Log     *slog.Logger
+	Ready   ReadinessCheck
+	Backend string
+}
+
+func NewRouter(deps Deps) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -15,10 +24,26 @@ func NewRouter(log *slog.Logger) http.Handler {
 	})
 
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		if deps.Ready != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+
+			if err := deps.Ready(ctx); err != nil {
+				deps.Log.Warn("readiness check failed", "error", err)
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"status": "unavailable",
+					"reason": "storage",
+				})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":  "ready",
+			"storage": deps.Backend,
+		})
 	})
 
-	return withRequestLog(log, mux)
+	return withRequestLog(deps.Log, mux)
 }
 
 func withRequestLog(log *slog.Logger, next http.Handler) http.Handler {

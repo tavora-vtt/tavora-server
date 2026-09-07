@@ -8,12 +8,45 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: tavora
+          POSTGRES_DB: tavora
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TAVORA_TEST_POSTGRES_DSN: postgres://postgres:tavora@127.0.0.1:5432/tavora?sslmode=disable
+      TAVORA_TEST_REQUIRE_POSTGRES: "1"
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed for:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - run: go vet ./...
-      - run: go test ./...
+
+      - name: Tests, both storage backends
+        run: go test ./... -race
+
       - run: go build ./...
