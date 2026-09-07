@@ -75,16 +75,17 @@ type Deps struct {
 }
 
 type Session struct {
-	id      string
-	conn    Conn
-	codec   Codec
-	outbox  *outbox
-	deps    Deps
-	log     *slog.Logger
-	hub     *Hub
-	userID  storage.ID
-	worldID storage.ID
-	role    string
+	id          string
+	conn        Conn
+	codec       Codec
+	outbox      *outbox
+	deps        Deps
+	log         *slog.Logger
+	hub         *Hub
+	userID      storage.ID
+	worldID     storage.ID
+	role        string
+	displayName string
 
 	lastSeq atomic.Int64
 
@@ -243,6 +244,7 @@ func (s *Session) authenticate(parent context.Context) (*Hello, error) {
 	}
 	s.role = string(role)
 
+	s.displayName = s.resolveDisplayName(ctx)
 	s.log = s.log.With("user", string(s.userID), "world", string(s.worldID), "role", s.role)
 	s.Subscribe(WorldChannel(s.worldID), UserChannel(s.userID))
 
@@ -283,6 +285,19 @@ func (s *Session) welcome(ctx context.Context, hello *Hello) error {
 	return s.outbox.PrependDocument(replay)
 }
 
+func (s *Session) resolveDisplayName(ctx context.Context) string {
+	var name string
+	_ = s.deps.Store.ReadOnly(ctx, func(q storage.Query) error {
+		user, err := q.GetUser(ctx, s.userID)
+		if err != nil {
+			return err
+		}
+		name = user.Username
+		return nil
+	})
+	return name
+}
+
 func (s *Session) resolveRole(ctx context.Context) (perm.Role, error) {
 	var role perm.Role
 	err := s.deps.Store.ReadOnly(ctx, func(q storage.Query) error {
@@ -294,6 +309,13 @@ func (s *Session) resolveRole(ctx context.Context) (perm.Role, error) {
 		return "", fmt.Errorf("%w: %s", ErrNotAMember, err)
 	}
 	return role, nil
+}
+
+func (s *Session) DisplayName() string {
+	if s.displayName != "" {
+		return s.displayName
+	}
+	return string(s.userID)
 }
 
 func (s *Session) Subject() perm.Subject {

@@ -24,6 +24,7 @@ func NewGateway(deps Deps) *Gateway {
 	if deps.Router == nil {
 		deps.Router = NewRouter()
 		RegisterCoreIntents(deps.Router)
+		RegisterChatIntents(deps.Router)
 	}
 	if deps.Tickets == nil {
 		deps.Tickets = NewTicketStore(DefaultTicketTTL)

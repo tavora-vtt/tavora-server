@@ -89,6 +89,7 @@ func New(config Config, log *slog.Logger) (*App, error) {
 
 	router := ws.NewRouter()
 	ws.RegisterCoreIntents(router)
+	ws.RegisterChatIntents(router)
 
 	tickets := ws.NewTicketStore(ws.DefaultTicketTTL)
 

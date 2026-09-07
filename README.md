@@ -156,6 +156,30 @@ Slugs are derived from the title when none is given, and a derived slug that col
 a numeric suffix rather than an error. A slug the user typed and that is taken is a 409,
 because they chose it.
 
+## Chat and dice
+
+`chat.post` carries what a person typed. `chat.roll` carries an expression, and the server
+resolves it: parse, roll from `crypto/rand`, and record every die including the ones a
+`kh`/`dl` modifier dropped, so a chat card shows the roll instead of asserting a number.
+A client never generates a die face that matters.
+
+The dice engine lives in `internal/core/dice` and supports counts, faces, flat modifiers
+and keep/drop selection, with a budget of 200 dice per expression. It is deliberately the
+**only** implementation: the client displays results and never rolls, so there is no second
+source of truth to diverge. [ADR 0001](https://github.com/tavora-vtt/tavora-docs/blob/main/adr/0001-server-language.md)
+plans to replace it with the shared TypeScript engine running in the script runtime, and
+until that lands this Go implementation stands alone rather than beside one.
+
+Generated messages travel as descriptors, not sentences: a roll produces
+`{key: "core.chat.rolled", params: {...}}` and the client renders it in the reader's
+language, per [concept doc 08](https://github.com/tavora-vtt/tavora-docs/blob/main/concept/08-i18n-and-accessibility.md).
+Free text a person typed stays text and is never translated. A test asserts that a
+generated message carries no pre-rendered text.
+
+A staff-only roll is an audience-restricted event: it is not sent to player sockets at all.
+A player who asks for a staff audience is silently downgraded to public rather than
+refused, and there is a test for each half.
+
 ## Permissions
 
 `internal/core/perm` is the pure part: roles, ownership levels, field visibility, and one
