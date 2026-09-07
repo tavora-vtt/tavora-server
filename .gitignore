@@ -1,0 +1,8 @@
+/tavora
+/dist/
+*.test
+*.out
+.env
+.env.*
+!.env.example
+/data/
