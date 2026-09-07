@@ -8,6 +8,7 @@ import (
 
 	"github.com/tavora-vtt/tavora-server/internal/core/auth"
 	"github.com/tavora-vtt/tavora-server/internal/core/perm"
+	"github.com/tavora-vtt/tavora-server/internal/core/sight"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
 
@@ -189,6 +190,12 @@ func (d AuthDeps) listTokensHandler() http.HandlerFunc {
 				Kind:     KindToken,
 				ParentID: &parent,
 			})
+			if err != nil {
+				return err
+			}
+
+			documents, err = sight.VisibleTokens(
+				r.Context(), q, d.Access, subject, worldID, sceneID, documents)
 			if err != nil {
 				return err
 			}

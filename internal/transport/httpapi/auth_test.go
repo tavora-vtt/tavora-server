@@ -12,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tavora-vtt/tavora-server/internal/core/access"
 	"github.com/tavora-vtt/tavora-server/internal/core/auth"
+	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 	"github.com/tavora-vtt/tavora-server/internal/storage/sqlite"
 	"github.com/tavora-vtt/tavora-server/internal/transport/ws"
@@ -63,6 +65,7 @@ func newAuthHarness(t *testing.T) *authHarness {
 			Service: service,
 			Store:   store,
 			Tickets: ws.NewTicketStore(ws.DefaultTicketTTL),
+			Access:  access.NewResolver(store, perm.OpenPolicy{}),
 		},
 	})
 

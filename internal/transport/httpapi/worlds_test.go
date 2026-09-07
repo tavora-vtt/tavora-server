@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
@@ -382,5 +383,75 @@ func TestNonMemberCannotSeeMembers(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", response.StatusCode, http.StatusForbidden)
+	}
+}
+
+func TestTokenListingRespectsLineOfSight(t *testing.T) {
+	h := newAuthHarness(t)
+	h.seedAdmin(t)
+	h.signIn(t)
+
+	ctx := context.Background()
+	world := h.createWorld(t)
+	worldID := storage.ID(world.ID)
+
+	invite := h.createInvite(t, world.ID, `{"role":"player"}`)
+	player := h.anonymous(t)
+	accepted := h.postAs(t, player, "/api/invites/"+invite.Token+"/accept",
+		`{"username":"tomas","password":"a-long-enough-password"}`)
+	accepted.Body.Close()
+
+	me, err := player.Get(h.server.URL + "/api/auth/me")
+	if err != nil {
+		t.Fatalf("me: %v", err)
+	}
+	var playerIdentity identity
+	_ = json.NewDecoder(me.Body).Decode(&playerIdentity)
+	me.Body.Close()
+
+	err = h.store.Tx(ctx, func(tx storage.Tx) error {
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: worldID, ID: "scene-1", Kind: "scene", Name: "Chantry",
+			Data:      json.RawMessage(`{"width":1000,"height":800,"gridSize":100}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: worldID, ID: "wall-1", Kind: "wall", ParentID: "scene-1", Name: "Wall",
+			Data:      json.RawMessage(`{"x1":5,"y1":0,"x2":5,"y2":20,"blocksSight":true}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: worldID, ID: "mine", Kind: "token", ParentID: "scene-1", Name: "Tomas",
+			Data:      json.RawMessage(`{"x":1,"y":5,"disposition":"friendly"}`),
+			Ownership: json.RawMessage(`{"` + playerIdentity.ID + `":"owner"}`),
+		}); err != nil {
+			return err
+		}
+		return tx.PutDocument(ctx, &storage.Document{
+			WorldID: worldID, ID: "hidden", Kind: "token", ParentID: "scene-1", Name: "Sheriff",
+			Data:      json.RawMessage(`{"x":9,"y":5,"disposition":"hostile"}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		})
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	response, err := player.Get(h.server.URL + "/api/worlds/" + world.ID + "/scenes/scene-1/tokens")
+	if err != nil {
+		t.Fatalf("list tokens: %v", err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+
+	if strings.Contains(string(body), "Sheriff") {
+		t.Errorf("the token listing leaked a token behind a wall:\n%s", body)
+	}
+	if !strings.Contains(string(body), "Tomas") {
+		t.Errorf("the player's own token is missing:\n%s", body)
 	}
 }

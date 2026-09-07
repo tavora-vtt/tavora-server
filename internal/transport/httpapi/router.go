@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/tavora-vtt/tavora-server/internal/core/access"
+	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 )
 
 type ReadinessCheck func(ctx context.Context) error
@@ -19,6 +22,10 @@ type Deps struct {
 }
 
 func NewRouter(deps Deps) http.Handler {
+	if deps.Auth.Store != nil && deps.Auth.Access == nil {
+		deps.Auth.Access = access.NewResolver(deps.Auth.Store, perm.OpenPolicy{})
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

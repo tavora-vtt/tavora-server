@@ -1,4 +1,4 @@
-package ws
+package sight
 
 import (
 	"context"
@@ -25,7 +25,7 @@ type wallGeometry struct {
 	DoorOpen    bool    `json:"doorOpen"`
 }
 
-func blockersOf(ctx context.Context, q storage.Query, worldID, sceneID storage.ID) ([]vision.Segment, error) {
+func BlockersOf(ctx context.Context, q storage.Query, worldID, sceneID storage.ID) ([]vision.Segment, error) {
 	parent := sceneID
 	walls, err := q.ListDocuments(ctx, worldID, storage.DocumentFilter{
 		Kind:     "wall",
@@ -52,7 +52,7 @@ func blockersOf(ctx context.Context, q storage.Query, worldID, sceneID storage.I
 	return blockers, nil
 }
 
-func viewpointsOf(
+func ViewpointsOf(
 	ctx context.Context,
 	q storage.Query,
 	resolver *access.Resolver,
@@ -94,7 +94,7 @@ func pointOf(token *storage.Document) (vision.Point, bool) {
 	return vision.Point{X: geometry.X, Y: geometry.Y}, true
 }
 
-func withinSight(
+func Filter(
 	ctx context.Context,
 	q storage.Query,
 	resolver *access.Resolver,
@@ -111,7 +111,7 @@ func withinSight(
 		return views, nil
 	}
 
-	blockers, err := blockersOf(ctx, q, worldID, token.ParentID)
+	blockers, err := BlockersOf(ctx, q, worldID, token.ParentID)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func withinSight(
 			continue
 		}
 
-		points, err := viewpointsOf(ctx, q, resolver, view.Subject, worldID, token.ParentID)
+		points, err := ViewpointsOf(ctx, q, resolver, view.Subject, worldID, token.ParentID)
 		if err != nil {
 			return nil, err
 		}
@@ -135,4 +135,41 @@ func withinSight(
 		}
 	}
 	return filtered, nil
+}
+
+func VisibleTokens(
+	ctx context.Context,
+	q storage.Query,
+	resolver *access.Resolver,
+	subject perm.Subject,
+	worldID, sceneID storage.ID,
+	tokens []*storage.Document,
+) ([]*storage.Document, error) {
+	blockers, err := BlockersOf(ctx, q, worldID, sceneID)
+	if err != nil {
+		return nil, err
+	}
+	if len(blockers) == 0 || subject.Role.IsStaff() {
+		return tokens, nil
+	}
+
+	points, err := ViewpointsOf(ctx, q, resolver, subject, worldID, sceneID)
+	if err != nil {
+		return nil, err
+	}
+	if len(points) == 0 {
+		return tokens, nil
+	}
+
+	visible := make([]*storage.Document, 0, len(tokens))
+	for _, token := range tokens {
+		target, ok := pointOf(token)
+		if !ok {
+			continue
+		}
+		if vision.VisibleFromAny(points, target, blockers) {
+			visible = append(visible, token)
+		}
+	}
+	return visible, nil
 }

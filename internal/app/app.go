@@ -91,6 +91,7 @@ func New(config Config, log *slog.Logger) (*App, error) {
 	ws.RegisterCoreIntents(router)
 	ws.RegisterChatIntents(router)
 	ws.RegisterCombatIntents(router)
+	ws.RegisterDoorIntents(router)
 
 	tickets := ws.NewTicketStore(ws.DefaultTicketTTL)
 

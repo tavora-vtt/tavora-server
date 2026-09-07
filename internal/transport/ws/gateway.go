@@ -26,6 +26,7 @@ func NewGateway(deps Deps) *Gateway {
 		RegisterCoreIntents(deps.Router)
 		RegisterChatIntents(deps.Router)
 		RegisterCombatIntents(deps.Router)
+		RegisterDoorIntents(deps.Router)
 	}
 	if deps.Tickets == nil {
 		deps.Tickets = NewTicketStore(DefaultTicketTTL)

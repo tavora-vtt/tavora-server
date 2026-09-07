@@ -153,3 +153,139 @@ func TestAnOpenDoorLetsSightThrough(t *testing.T) {
 		t.Errorf("an open door still blocked sight:\n%s", raw)
 	}
 }
+
+func seedDoorScene(t *testing.T, h *harness) {
+	t.Helper()
+	ctx := context.Background()
+
+	err := h.store.Tx(ctx, func(tx storage.Tx) error {
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "scene-1", Kind: "scene", Name: "Chantry",
+			Data:      json.RawMessage(`{"width":1000,"height":800,"gridSize":100}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "door-1", Kind: "wall", ParentID: "scene-1", Name: "Door",
+			Data:      json.RawMessage(`{"x1":5,"y1":0,"x2":5,"y2":20,"blocksSight":true,"door":true,"doorOpen":false}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "own-token", Kind: "token", ParentID: "scene-1", Name: "Nadia",
+			Data:      json.RawMessage(`{"x":1,"y":5,"disposition":"friendly"}`),
+			Ownership: json.RawMessage(`{"user-2":"owner"}`),
+		}); err != nil {
+			return err
+		}
+		return tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "far-token", Kind: "token", ParentID: "scene-1", Name: "Sheriff",
+			Data:      json.RawMessage(`{"x":9,"y":5,"disposition":"hostile"}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		})
+	})
+	if err != nil {
+		t.Fatalf("seed door scene: %v", err)
+	}
+}
+
+func TestOpeningADoorRevealsWhatWasHidden(t *testing.T) {
+	h := newHarness(t)
+	seedDoorScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	player, _ := h.connect(t, "user-2", 0)
+
+	payload, _ := json.Marshal(DoorTogglePayload{WallID: "door-1"})
+	gm.send(t, Frame{
+		Lane:   LaneDocument,
+		Type:   TypeIntent,
+		Intent: &Intent{RequestID: 1, Kind: "scene.door.toggle", Payload: payload},
+	})
+
+	ack := gm.nextOfType(t, TypeAck)
+	var state DoorState
+	if err := json.Unmarshal(ack.Ack.Result, &state); err != nil {
+		t.Fatalf("decode door: %v", err)
+	}
+	if !state.DoorOpen {
+		t.Errorf("the door did not open: %+v", state)
+	}
+
+	raw := drainUntil(t, player, "scene.visibility", waitFor)
+	if !strings.Contains(raw, "Sheriff") {
+		t.Errorf("opening the door did not reveal the token behind it:\n%s", raw)
+	}
+}
+
+func TestClosingADoorHidesAgain(t *testing.T) {
+	h := newHarness(t)
+	seedDoorScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	player, _ := h.connect(t, "user-2", 0)
+
+	toggle := func(requestID uint32) {
+		t.Helper()
+		payload, _ := json.Marshal(DoorTogglePayload{WallID: "door-1"})
+		gm.send(t, Frame{
+			Lane:   LaneDocument,
+			Type:   TypeIntent,
+			Intent: &Intent{RequestID: requestID, Kind: "scene.door.toggle", Payload: payload},
+		})
+		gm.nextOfType(t, TypeAck)
+	}
+
+	toggle(1)
+	drainUntil(t, player, "scene.visibility", waitFor)
+
+	toggle(2)
+	raw := drainUntil(t, player, "scene.visibility", waitFor)
+
+	if strings.Contains(raw, "Sheriff") {
+		t.Errorf("closing the door left the hidden token in the player's view:\n%s", raw)
+	}
+	if !strings.Contains(raw, "Nadia") {
+		t.Errorf("the player lost sight of their own token:\n%s", raw)
+	}
+}
+
+func TestAPlayerCannotOpenADoor(t *testing.T) {
+	h := newHarness(t)
+	seedDoorScene(t, h)
+
+	player, _ := h.connect(t, "user-2", 0)
+
+	payload, _ := json.Marshal(DoorTogglePayload{WallID: "door-1"})
+	player.send(t, Frame{
+		Lane:   LaneDocument,
+		Type:   TypeIntent,
+		Intent: &Intent{RequestID: 1, Kind: "scene.door.toggle", Payload: payload},
+	})
+
+	frame := player.nextOfType(t, TypeError)
+	if frame.Error.Code != CodeForbidden {
+		t.Errorf("error code = %q", frame.Error.Code)
+	}
+}
+
+func TestTogglingAPlainWallIsRefused(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+
+	payload, _ := json.Marshal(DoorTogglePayload{WallID: "wall-1"})
+	gm.send(t, Frame{
+		Lane:   LaneDocument,
+		Type:   TypeIntent,
+		Intent: &Intent{RequestID: 1, Kind: "scene.door.toggle", Payload: payload},
+	})
+
+	frame := gm.nextOfType(t, TypeError)
+	if frame.Error.MessageKey != "core.scene.notADoor" {
+		t.Errorf("message key = %q", frame.Error.MessageKey)
+	}
+}

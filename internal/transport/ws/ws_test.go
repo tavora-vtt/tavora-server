@@ -186,6 +186,7 @@ func newHarness(t *testing.T) *harness {
 	RegisterCoreIntents(router)
 	RegisterChatIntents(router)
 	RegisterCombatIntents(router)
+	RegisterDoorIntents(router)
 
 	tickets := NewTicketStore(DefaultTicketTTL)
 
@@ -752,4 +753,32 @@ func TestOnlyStaffCanActivateAScene(t *testing.T) {
 	if frame.Error.Code != CodeForbidden {
 		t.Errorf("error code = %q, want %q", frame.Error.Code, CodeForbidden)
 	}
+}
+
+func TestTwoFramesNeverShareASequence(t *testing.T) {
+	box := newOutbox(8, 8)
+
+	_ = box.PushDocument(Frame{Type: TypeEvent, Event: &Event{Seq: 1, Kind: "first"}})
+	_ = box.PushDocument(Frame{Type: TypeEvent, Event: &Event{Seq: 1, Kind: "second"}})
+	_ = box.PushDocument(Frame{Type: TypeEvent, Event: &Event{Seq: 2, Kind: "third"}})
+
+	session := &Session{outbox: box}
+
+	written := make([]string, 0, 3)
+	for {
+		frame, present := box.Pop()
+		if !present {
+			break
+		}
+		if frame.Event.Seq <= session.lastSeq.Load() {
+			continue
+		}
+		session.lastSeq.Store(frame.Event.Seq)
+		written = append(written, frame.Event.Kind)
+	}
+
+	if len(written) != 2 || written[0] != "first" || written[1] != "third" {
+		t.Fatalf("written = %v", written)
+	}
+	t.Log("the writer drops a second frame that reuses a sequence, so the server must never mint one")
 }

@@ -188,6 +188,13 @@ has a test, as does an open door letting sight through.
 This is the conservative server-side check doc 04 describes, not the client's rendering.
 The pretty per-pixel fog stays a client concern and is still to come.
 
+The same filter runs on the REST token listing, not only on fan-out. Leaving it on one path
+would have meant the socket hid a token that a plain `GET` handed over.
+
+`scene.door.toggle` flips a door and then pushes each member the set of tokens they can now
+see, so opening a door reveals what was behind it without anyone reloading. Closing it takes
+them away again.
+
 ## Combat
 
 `combat.start` gathers the tokens on a scene, rolls initiative for each and stores the

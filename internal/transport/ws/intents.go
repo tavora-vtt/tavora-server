@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/tavora-vtt/tavora-server/internal/core/access"
+	"github.com/tavora-vtt/tavora-server/internal/core/sight"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
 
@@ -224,7 +225,7 @@ func applyPatch(
 			return err
 		}
 
-		views, err = withinSight(ctx, tx, session.Access(), session.WorldID(), patched, views)
+		views, err = sight.Filter(ctx, tx, session.Access(), session.WorldID(), patched, views)
 		return err
 	})
 
