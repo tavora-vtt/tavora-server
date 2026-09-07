@@ -81,6 +81,13 @@ func NewRouter(deps Deps) http.Handler {
 		mux.HandleFunc("POST /api/worlds/{worldId}/actors", deps.Auth.createActorHandler())
 		mux.HandleFunc("PUT /api/worlds/{worldId}/documents/{documentId}/access", deps.Auth.setDocumentAccessHandler())
 
+		if deps.Auth.Assets.Blobs != nil {
+			mux.HandleFunc("GET /api/worlds/{worldId}/assets", deps.Auth.listAssetsHandler())
+			mux.HandleFunc("POST /api/worlds/{worldId}/assets", deps.Auth.uploadAssetHandler())
+			mux.HandleFunc("GET /assets/{worldId}/{assetId}", deps.Auth.serveAssetHandler())
+			mux.HandleFunc("GET /assets/{worldId}/{assetId}/{variant}", deps.Auth.serveAssetHandler())
+		}
+
 		mux.HandleFunc("GET /api/invites/{token}", deps.Auth.previewInviteHandler())
 		mux.HandleFunc("POST /api/invites/{token}/accept", deps.Auth.acceptInviteHandler())
 	}

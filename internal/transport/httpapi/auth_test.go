@@ -14,6 +14,7 @@ import (
 
 	"github.com/tavora-vtt/tavora-server/internal/core/access"
 	"github.com/tavora-vtt/tavora-server/internal/core/auth"
+	"github.com/tavora-vtt/tavora-server/internal/core/blob"
 	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 	"github.com/tavora-vtt/tavora-server/internal/storage/sqlite"
@@ -21,6 +22,8 @@ import (
 )
 
 const testWorld = storage.ID("world-1")
+
+const testWorldQuota = 8 << 20
 
 type authHarness struct {
 	server  *httptest.Server
@@ -53,6 +56,11 @@ func newAuthHarness(t *testing.T) *authHarness {
 		t.Fatalf("seed world: %v", err)
 	}
 
+	blobs, err := blob.NewDisk(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
 	service := auth.NewService(store, auth.Options{
 		HashParams: auth.HashParams{Memory: 1024, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32},
 	})
@@ -66,6 +74,7 @@ func newAuthHarness(t *testing.T) *authHarness {
 			Store:   store,
 			Tickets: ws.NewTicketStore(ws.DefaultTicketTTL),
 			Access:  access.NewResolver(store, perm.OpenPolicy{}),
+			Assets:  AssetDeps{Blobs: blobs, WorldQuota: testWorldQuota},
 		},
 	})
 

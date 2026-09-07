@@ -47,6 +47,8 @@ func Run(t *testing.T, newStore Factory) {
 		{"EventsSince", testEventsSince},
 		{"TransactionRollsBack", testTransactionRollback},
 		{"ReadOnlyRejectsWrites", testReadOnlyRejectsWrites},
+		{"AssetRoundTrip", testAssetRoundTrip},
+		{"TheSameContentIsStoredOnce", testAssetContentAddressing},
 	}
 
 	for _, test := range tests {
@@ -1086,5 +1088,113 @@ func testInviteLifecycle(t *testing.T, store storage.Store) {
 		if entry.ID == "invite-2" && entry.RevokedAt == nil {
 			t.Error("revocation not recorded")
 		}
+	}
+}
+
+func testAssetRoundTrip(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+
+	err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutAsset(ctx, &storage.Asset{
+			ID:         "asset-1",
+			WorldID:    worldID,
+			SHA256:     "aa11",
+			Mime:       "image/png",
+			Bytes:      4096,
+			Width:      800,
+			Height:     600,
+			Variants:   json.RawMessage(`{"thumb":{"key":"aa11-thumb"}}`),
+			UploadedBy: "user-1",
+		})
+	})
+	if err != nil {
+		t.Fatalf("put asset: %v", err)
+	}
+
+	var (
+		loaded *storage.Asset
+		listed []storage.Asset
+		total  int64
+	)
+	err = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		if loaded, readErr = q.GetAsset(ctx, worldID, "asset-1"); readErr != nil {
+			return readErr
+		}
+		if listed, readErr = q.ListAssets(ctx, worldID, 0); readErr != nil {
+			return readErr
+		}
+		total, readErr = q.SumAssetBytes(ctx, worldID)
+		return readErr
+	})
+	if err != nil {
+		t.Fatalf("read asset: %v", err)
+	}
+
+	if loaded.Mime != "image/png" || loaded.Width != 800 || loaded.Height != 600 {
+		t.Errorf("asset came back as %+v", loaded)
+	}
+	if loaded.CreatedAt.IsZero() {
+		t.Error("created_at was not filled in")
+	}
+	if decode(t, loaded.Variants)["thumb"] == nil {
+		t.Errorf("variants came back as %s", loaded.Variants)
+	}
+	if len(listed) != 1 {
+		t.Errorf("listed %d assets, want 1", len(listed))
+	}
+	if total != 4096 {
+		t.Errorf("world holds %d bytes, want 4096", total)
+	}
+
+	err = store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.DeleteAsset(ctx, worldID, "asset-1")
+	})
+	if err != nil {
+		t.Fatalf("delete asset: %v", err)
+	}
+
+	err = store.ReadOnly(ctx, func(q storage.Query) error {
+		_, readErr := q.GetAsset(ctx, worldID, "asset-1")
+		return readErr
+	})
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("a deleted asset was still readable: %v", err)
+	}
+}
+
+func testAssetContentAddressing(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+
+	first := &storage.Asset{
+		ID: "asset-1", WorldID: worldID, SHA256: "deadbeef", Mime: "image/png", Bytes: 10,
+	}
+	if err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutAsset(ctx, first)
+	}); err != nil {
+		t.Fatalf("put first asset: %v", err)
+	}
+
+	second := &storage.Asset{
+		ID: "asset-2", WorldID: worldID, SHA256: "deadbeef", Mime: "image/png", Bytes: 10,
+	}
+	err := store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutAsset(ctx, second)
+	})
+	if !errors.Is(err, storage.ErrAlreadyExists) {
+		t.Fatalf("the same content was stored twice: %v", err)
+	}
+
+	var found *storage.Asset
+	err = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		found, readErr = q.GetAssetBySHA256(ctx, worldID, "deadbeef")
+		return readErr
+	})
+	if err != nil {
+		t.Fatalf("look up by hash: %v", err)
+	}
+	if found.ID != "asset-1" {
+		t.Errorf("hash lookup returned %s, want asset-1", found.ID)
 	}
 }

@@ -46,6 +46,7 @@ type sceneView struct {
 type tokenView struct {
 	ID   string          `json:"id"`
 	Name string          `json:"name"`
+	Img  string          `json:"img,omitempty"`
 	Data json.RawMessage `json:"data"`
 }
 
@@ -60,6 +61,7 @@ type createTokenRequest struct {
 	Name        string  `json:"name"`
 	X           float64 `json:"x"`
 	Y           float64 `json:"y"`
+	Img         string  `json:"img"`
 	Disposition string  `json:"disposition"`
 }
 
@@ -214,7 +216,7 @@ func (d AuthDeps) listTokensHandler() http.HandlerFunc {
 					continue
 				}
 				views = append(views, tokenView{
-					ID: string(visible.ID), Name: visible.Name, Data: visible.Data,
+					ID: string(visible.ID), Name: visible.Name, Img: visible.Img, Data: visible.Data,
 				})
 			}
 			return nil
@@ -263,6 +265,7 @@ func (d AuthDeps) createTokenHandler() http.HandlerFunc {
 			Kind:      KindToken,
 			ParentID:  sceneID,
 			Name:      strings.TrimSpace(body.Name),
+			Img:       body.Img,
 			Data:      data,
 			Ownership: json.RawMessage(`{"default":"observer"}`),
 		}
@@ -283,7 +286,7 @@ func (d AuthDeps) createTokenHandler() http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusCreated, tokenView{
-			ID: string(document.ID), Name: document.Name, Data: document.Data,
+			ID: string(document.ID), Name: document.Name, Img: document.Img, Data: document.Data,
 		})
 	}
 }

@@ -14,6 +14,7 @@ type DocumentPatchPayload struct {
 	ID    string         `json:"id"`
 	Name  *string        `json:"name,omitempty"`
 	Sort  *int           `json:"sort,omitempty"`
+	Img   *string        `json:"img,omitempty"`
 	Set   map[string]any `json:"set,omitempty"`
 	Unset []string       `json:"unset,omitempty"`
 }
@@ -166,6 +167,7 @@ func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (
 	return applyPatch(ctx, session, storage.ID(payload.ID), storage.Patch{
 		Name:  payload.Name,
 		Sort:  payload.Sort,
+		Img:   payload.Img,
 		Set:   payload.Set,
 		Unset: payload.Unset,
 	}, "document.patch", payload)

@@ -272,12 +272,37 @@ want to read as base64. Both encodings sit behind one `Codec` interface over one
 frame model, and a contract test asserts they decode to the same frame for every frame
 type. A cursor frame is 62 bytes as Protobuf and 147 as JSON.
 
+## Assets
+
+`POST /api/worlds/{worldId}/assets` takes one multipart file and gives back an asset. What
+it does with the file is the point: the format is decided by magic bytes, the image is
+decoded and encoded again from pixels, and the SHA-256 of the re-encoded bytes becomes the
+storage key. So the filename, the declared content type and every metadata segment take
+part in no decision and reach no output. An SVG named `portrait.png` is refused with 415,
+a JPEG's comment segment does not survive, and the same map uploaded twice is stored once.
+
+Binary content lives behind a `Blobs` port, on local disk by default under
+`TAVORA_BLOB_ROOT`. Keys are hashes, so no user-controlled path component ever reaches the
+filesystem, and the disk adapter refuses anything that is not one. The database stores
+metadata only, plus a `variants` object recording the thumbnail produced in the same pass.
+
+Serving happens on `/assets/{worldId}/{assetId}`, which requires world membership and sets
+`nosniff`, a `default-src 'none'; sandbox` policy and a same-site resource policy, so an
+upload that somehow carries markup cannot run as a document. `TAVORA_WORLD_QUOTA_BYTES`
+caps what one world may hold.
+
+Re-encoding is to PNG and JPEG, not yet to KTX2 with Basis. The reasoning, and what that
+costs, is in
+[ADR 0009](https://github.com/tavora-vtt/tavora-docs/blob/main/adr/0009-asset-pipeline-first-cut.md).
+
 ## Status
 
 M0 is complete and M1 is under way. HTTP surface, graceful shutdown, the storage port with
 both backends, the WebSocket gateway with lanes, backpressure and reconnect catch-up,
 authentication, world and membership management with invite links, and the permission model
-with field-level redaction are in place. The scene model lands next.
+with field-level redaction are in place. So is the scene model: scenes, tokens, walls,
+server-side line of sight, doors that reveal and hide what is behind them, combat order,
+and the asset pipeline that puts real maps and portraits on the table.
 
 ## Licence
 

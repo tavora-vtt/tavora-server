@@ -100,6 +100,20 @@ type Document struct {
 	DeletedAt     *time.Time
 }
 
+type Asset struct {
+	ID         ID
+	WorldID    ID
+	SHA256     string
+	Mime       string
+	Bytes      int64
+	Width      int
+	Height     int
+	DurationMS int
+	Variants   json.RawMessage
+	UploadedBy ID
+	CreatedAt  time.Time
+}
+
 type Event struct {
 	WorldID     ID
 	Seq         int64
@@ -189,6 +203,10 @@ type Query interface {
 	ListDocuments(ctx context.Context, worldID ID, filter DocumentFilter) ([]*Document, error)
 	QuerySystemData(ctx context.Context, worldID ID, query JSONQuery) ([]*Document, error)
 	EventsSince(ctx context.Context, worldID ID, seq int64, limit int) ([]Event, error)
+	GetAsset(ctx context.Context, worldID, id ID) (*Asset, error)
+	GetAssetBySHA256(ctx context.Context, worldID ID, sha256 string) (*Asset, error)
+	ListAssets(ctx context.Context, worldID ID, limit int) ([]Asset, error)
+	SumAssetBytes(ctx context.Context, worldID ID) (int64, error)
 }
 
 type Tx interface {
@@ -209,6 +227,8 @@ type Tx interface {
 	PatchDocument(ctx context.Context, worldID, id ID, patch Patch) (*Document, error)
 	DeleteDocument(ctx context.Context, worldID, id ID, mode DeleteMode) error
 	AppendEvent(ctx context.Context, event Event) (int64, error)
+	PutAsset(ctx context.Context, asset *Asset) error
+	DeleteAsset(ctx context.Context, worldID, id ID) error
 }
 
 type Store interface {

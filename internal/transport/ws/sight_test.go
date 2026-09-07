@@ -289,3 +289,39 @@ func TestTogglingAPlainWallIsRefused(t *testing.T) {
 		t.Errorf("message key = %q", frame.Error.MessageKey)
 	}
 }
+
+func TestTokenArtReachesEveryoneWhoCanSeeTheToken(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	player, _ := h.connect(t, "user-2", 0)
+
+	art := "/assets/world-1/asset-portrait"
+	payload, err := json.Marshal(DocumentPatchPayload{ID: "own-token", Img: &art})
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	gm.send(t, Frame{
+		Lane:   LaneDocument,
+		Type:   TypeIntent,
+		Intent: &Intent{RequestID: 1, Kind: "document.patch", Payload: payload},
+	})
+
+	if received := drainUntil(t, player, art, waitFor); !strings.Contains(received, "own-token") {
+		t.Errorf("the art arrived without its token:\n%s", received)
+	}
+
+	var stored *storage.Document
+	err = h.store.ReadOnly(context.Background(), func(q storage.Query) error {
+		var readErr error
+		stored, readErr = q.GetDocument(context.Background(), testWorld, "own-token")
+		return readErr
+	})
+	if err != nil {
+		t.Fatalf("read token: %v", err)
+	}
+	if stored.Img != art {
+		t.Errorf("the token kept %q as its art, want %q", stored.Img, art)
+	}
+}

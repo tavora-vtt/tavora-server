@@ -33,6 +33,7 @@ type AuthDeps struct {
 	Store         storage.Store
 	Tickets       *ws.TicketStore
 	Access        *access.Resolver
+	Assets        AssetDeps
 	SecureCookies bool
 }
 

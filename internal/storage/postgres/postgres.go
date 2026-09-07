@@ -208,5 +208,22 @@ func (dialect) Migrations() [][]string {
 		{
 			`ALTER TABLE worlds ADD COLUMN active_scene TEXT NOT NULL DEFAULT ''`,
 		},
+		{
+			`CREATE TABLE assets (
+				id          TEXT PRIMARY KEY,
+				world_id    TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+				sha256      TEXT NOT NULL,
+				mime        TEXT NOT NULL,
+				bytes       BIGINT NOT NULL,
+				width       INTEGER NOT NULL DEFAULT 0,
+				height      INTEGER NOT NULL DEFAULT 0,
+				duration_ms INTEGER NOT NULL DEFAULT 0,
+				variants    JSONB NOT NULL,
+				uploaded_by TEXT NOT NULL DEFAULT '',
+				created_at  TIMESTAMPTZ NOT NULL
+			)`,
+			`CREATE UNIQUE INDEX assets_sha_idx ON assets (world_id, sha256)`,
+			`CREATE INDEX assets_world_idx ON assets (world_id, created_at)`,
+		},
 	}
 }

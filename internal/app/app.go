@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/tavora-vtt/tavora-server/internal/core/access"
 	"github.com/tavora-vtt/tavora-server/internal/core/auth"
+	"github.com/tavora-vtt/tavora-server/internal/core/blob"
 	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 	"github.com/tavora-vtt/tavora-server/internal/storage/postgres"
@@ -21,6 +23,8 @@ import (
 
 const (
 	defaultBind            = "0.0.0.0:30000"
+	defaultBlobRoot        = "data/blobs"
+	defaultWorldQuota      = 4 << 30
 	defaultStorageDriver   = "sqlite"
 	defaultStorageDSN      = "data/tavora.db"
 	defaultShutdownTimeout = 15 * time.Second
@@ -30,6 +34,9 @@ const (
 
 type Config struct {
 	Bind            string
+	BlobRoot        string
+	AssetBaseURL    string
+	WorldQuota      int64
 	StorageDriver   string
 	StorageDSN      string
 	JSONProtocol    bool
@@ -40,6 +47,8 @@ type Config struct {
 func ConfigFromEnv() Config {
 	config := Config{
 		Bind:            defaultBind,
+		BlobRoot:        defaultBlobRoot,
+		WorldQuota:      defaultWorldQuota,
 		StorageDriver:   defaultStorageDriver,
 		StorageDSN:      defaultStorageDSN,
 		ShutdownTimeout: defaultShutdownTimeout,
@@ -52,6 +61,17 @@ func ConfigFromEnv() Config {
 	}
 	if value := os.Getenv("TAVORA_STORAGE_DSN"); value != "" {
 		config.StorageDSN = value
+	}
+	if value := os.Getenv("TAVORA_BLOB_ROOT"); value != "" {
+		config.BlobRoot = value
+	}
+	if value := os.Getenv("TAVORA_ASSET_BASE_URL"); value != "" {
+		config.AssetBaseURL = value
+	}
+	if value := os.Getenv("TAVORA_WORLD_QUOTA_BYTES"); value != "" {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			config.WorldQuota = parsed
+		}
 	}
 	if os.Getenv("TAVORA_PROTOCOL_JSON") == "1" {
 		config.JSONProtocol = true
@@ -110,6 +130,13 @@ func New(config Config, log *slog.Logger) (*App, error) {
 		log.Info("readable json protocol available at /ws?format=json")
 	}
 
+	blobs, err := blob.NewDisk(config.BlobRoot)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	log.Info("asset storage ready", "root", config.BlobRoot)
+
 	authService := auth.NewService(store, auth.Options{})
 
 	needsSetup, err := authService.NeedsSetup(ctx)
@@ -131,6 +158,11 @@ func New(config Config, log *slog.Logger) (*App, error) {
 			Tickets:       tickets,
 			Access:        resolver,
 			SecureCookies: config.SecureCookies,
+			Assets: httpapi.AssetDeps{
+				Blobs:        blobs,
+				WorldQuota:   config.WorldQuota,
+				AssetBaseURL: config.AssetBaseURL,
+			},
 		},
 		WebSocket: gateway.WebSocketHandler(),
 	})
