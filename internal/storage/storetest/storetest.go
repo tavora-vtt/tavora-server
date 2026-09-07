@@ -20,6 +20,8 @@ func Run(t *testing.T, newStore Factory) {
 		fn   func(t *testing.T, store storage.Store)
 	}{
 		{"WorldRoundTrip", testWorldRoundTrip},
+		{"MemberRoundTrip", testMemberRoundTrip},
+		{"MissingMemberIsNotFound", testMissingMemberIsNotFound},
 		{"DocumentRoundTrip", testDocumentRoundTrip},
 		{"UpsertPreservesCreatedAt", testUpsertPreservesCreatedAt},
 		{"MissingDocumentIsNotFound", testMissingDocumentIsNotFound},
@@ -693,5 +695,76 @@ func testReadOnlyRejectsWrites(t *testing.T, store storage.Store) {
 	})
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("read only transaction wrote a document: %v", err)
+	}
+}
+
+func testMemberRoundTrip(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+
+	err := store.Tx(ctx, func(tx storage.Tx) error {
+		for _, member := range []storage.Member{
+			{WorldID: worldID, UserID: "user-1", Role: "gm"},
+			{WorldID: worldID, UserID: "user-2", Role: "player"},
+		} {
+			if err := tx.PutMember(ctx, &member); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("put members: %v", err)
+	}
+
+	var member *storage.Member
+	var members []storage.Member
+	err = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		if member, readErr = q.GetMember(ctx, worldID, "user-1"); readErr != nil {
+			return readErr
+		}
+		members, readErr = q.ListMembers(ctx, worldID)
+		return readErr
+	})
+	if err != nil {
+		t.Fatalf("read members: %v", err)
+	}
+
+	if member.Role != "gm" {
+		t.Errorf("role = %q", member.Role)
+	}
+	if member.JoinedAt.IsZero() {
+		t.Error("joined at not set")
+	}
+	if len(members) != 2 || members[0].UserID != "user-1" || members[1].UserID != "user-2" {
+		t.Errorf("members = %+v", members)
+	}
+
+	err = store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutMember(ctx, &storage.Member{WorldID: worldID, UserID: "user-2", Role: "assistant"})
+	})
+	if err != nil {
+		t.Fatalf("promote member: %v", err)
+	}
+
+	_ = store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		member, readErr = q.GetMember(ctx, worldID, "user-2")
+		return readErr
+	})
+	if member.Role != "assistant" {
+		t.Errorf("role after promotion = %q", member.Role)
+	}
+}
+
+func testMissingMemberIsNotFound(t *testing.T, store storage.Store) {
+	ctx := context.Background()
+
+	err := store.ReadOnly(ctx, func(q storage.Query) error {
+		_, err := q.GetMember(ctx, worldID, "stranger")
+		return err
+	})
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }

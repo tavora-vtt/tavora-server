@@ -29,6 +29,13 @@ type World struct {
 	ArchivedAt    *time.Time
 }
 
+type Member struct {
+	WorldID  ID
+	UserID   ID
+	Role     string
+	JoinedAt time.Time
+}
+
 type Document struct {
 	WorldID       ID
 	ID            ID
@@ -125,6 +132,8 @@ type JSONQuery struct {
 
 type Query interface {
 	GetWorld(ctx context.Context, id ID) (*World, error)
+	GetMember(ctx context.Context, worldID, userID ID) (*Member, error)
+	ListMembers(ctx context.Context, worldID ID) ([]Member, error)
 	GetDocument(ctx context.Context, worldID, id ID) (*Document, error)
 	ListDocuments(ctx context.Context, worldID ID, filter DocumentFilter) ([]*Document, error)
 	QuerySystemData(ctx context.Context, worldID ID, query JSONQuery) ([]*Document, error)
@@ -135,6 +144,7 @@ type Tx interface {
 	Query
 
 	PutWorld(ctx context.Context, world *World) error
+	PutMember(ctx context.Context, member *Member) error
 	PutDocument(ctx context.Context, doc *Document) error
 	PatchDocument(ctx context.Context, worldID, id ID, patch Patch) (*Document, error)
 	DeleteDocument(ctx context.Context, worldID, id ID, mode DeleteMode) error

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/tavora-vtt/tavora-server/internal/core/access"
+	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 	"github.com/tavora-vtt/tavora-server/internal/storage/postgres"
 	"github.com/tavora-vtt/tavora-server/internal/storage/sqlite"
@@ -90,6 +92,7 @@ func New(config Config, log *slog.Logger) (*App, error) {
 		Registry: ws.NewRegistry(log),
 		Tickets:  ws.NewTicketStore(ws.DefaultTicketTTL),
 		Router:   router,
+		Access:   access.NewResolver(store, perm.OpenPolicy{}),
 		Log:      log,
 	}, config.DevTickets)
 

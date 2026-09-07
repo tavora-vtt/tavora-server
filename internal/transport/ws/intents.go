@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/tavora-vtt/tavora-server/internal/core/access"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
 
@@ -16,11 +17,16 @@ type DocumentPatchPayload struct {
 	Unset []string       `json:"unset,omitempty"`
 }
 
-type DocumentPatchResult struct {
+type DocumentView struct {
 	ID         string          `json:"id"`
 	Seq        int64           `json:"seq"`
+	Kind       string          `json:"kind"`
+	Subtype    string          `json:"subtype,omitempty"`
 	Name       string          `json:"name"`
+	Img        string          `json:"img,omitempty"`
 	Data       json.RawMessage `json:"data"`
+	Flags      json.RawMessage `json:"flags,omitempty"`
+	Ownership  json.RawMessage `json:"ownership,omitempty"`
 	UpdatedSeq int64           `json:"updatedSeq"`
 }
 
@@ -38,17 +44,28 @@ func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (
 	}
 
 	var (
-		patched *storage.Document
-		seq     int64
+		seq   int64
+		views map[storage.ID]access.View
 	)
 
 	err := session.Store().Tx(ctx, func(tx storage.Tx) error {
-		eventPayload, marshalErr := json.Marshal(payload)
-		if marshalErr != nil {
-			return marshalErr
+		current, err := tx.GetDocument(ctx, session.WorldID(), storage.ID(payload.ID))
+		if err != nil {
+			return err
 		}
 
-		appended, appendErr := tx.AppendEvent(ctx, storage.Event{
+		if _, err := session.Access().Authorize(
+			ctx, tx, session.WorldID(), session.UserID(), current, true,
+		); err != nil {
+			return err
+		}
+
+		eventPayload, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+
+		seq, err = tx.AppendEvent(ctx, storage.Event{
 			WorldID:     session.WorldID(),
 			ActorUserID: session.UserID(),
 			Kind:        "document.patch",
@@ -56,23 +73,28 @@ func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (
 			TargetID:    storage.ID(payload.ID),
 			Payload:     eventPayload,
 		})
-		if appendErr != nil {
-			return appendErr
+		if err != nil {
+			return err
 		}
-		seq = appended
 
-		var patchErr error
-		patched, patchErr = tx.PatchDocument(ctx, session.WorldID(), storage.ID(payload.ID), storage.Patch{
+		patched, err := tx.PatchDocument(ctx, session.WorldID(), storage.ID(payload.ID), storage.Patch{
 			Name:  payload.Name,
 			Sort:  payload.Sort,
 			Set:   payload.Set,
 			Unset: payload.Unset,
-			Seq:   appended,
+			Seq:   seq,
 		})
-		return patchErr
+		if err != nil {
+			return err
+		}
+
+		views, err = session.Access().ProjectForMembers(ctx, tx, patched)
+		return err
 	})
 
 	switch {
+	case errors.Is(err, access.ErrForbidden):
+		return nil, NewIntentError(CodeForbidden, "core.intent.forbidden")
 	case errors.Is(err, storage.ErrNotFound):
 		return nil, NewIntentError(CodeNotFound, "core.intent.documentNotFound")
 	case errors.Is(err, storage.ErrInvalidPath):
@@ -81,31 +103,49 @@ func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (
 		return nil, err
 	}
 
-	eventPayload, err := json.Marshal(DocumentPatchResult{
-		ID:         string(patched.ID),
-		Seq:        seq,
-		Name:       patched.Name,
-		Data:       patched.Data,
-		UpdatedSeq: patched.UpdatedSeq,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	session.Hub().Publish(Publication{
-		Channel: WorldChannel(session.WorldID()),
-		Lane:    LaneDocument,
-		Frame: Frame{
+	perUser := make(map[storage.ID]Frame, len(views))
+	for userID, view := range views {
+		encoded, err := json.Marshal(viewOf(view, seq))
+		if err != nil {
+			return nil, err
+		}
+		perUser[userID] = Frame{
 			Lane: LaneDocument,
 			Type: TypeEvent,
 			Event: &Event{
 				Seq:     seq,
 				Kind:    "document.patch",
 				WorldID: string(session.WorldID()),
-				Payload: eventPayload,
+				Payload: encoded,
 			},
-		},
+		}
+	}
+
+	session.Hub().Publish(Publication{
+		Channel: WorldChannel(session.WorldID()),
+		Lane:    LaneDocument,
+		PerUser: perUser,
 	})
 
-	return eventPayload, nil
+	own, present := views[session.UserID()]
+	if !present {
+		return nil, NewIntentError(CodeForbidden, "core.intent.forbidden")
+	}
+	return json.Marshal(viewOf(own, seq))
+}
+
+func viewOf(view access.View, seq int64) DocumentView {
+	doc := view.Document
+	return DocumentView{
+		ID:         string(doc.ID),
+		Seq:        seq,
+		Kind:       doc.Kind,
+		Subtype:    doc.Subtype,
+		Name:       doc.Name,
+		Img:        doc.Img,
+		Data:       doc.Data,
+		Flags:      doc.Flags,
+		Ownership:  doc.Ownership,
+		UpdatedSeq: doc.UpdatedSeq,
+	}
 }

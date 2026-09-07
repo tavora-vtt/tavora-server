@@ -17,6 +17,7 @@ type Publication struct {
 	Lane     Lane
 	Key      string
 	Frame    Frame
+	PerUser  map[storage.ID]Frame
 	Audience []storage.ID
 	Exclude  string
 }
@@ -108,7 +109,16 @@ func (h *Hub) fanOut(sessions map[string]*Session, publication Publication) {
 			continue
 		}
 
-		if err := session.deliver(publication); err != nil {
+		frame := publication.Frame
+		if publication.PerUser != nil {
+			projected, visible := publication.PerUser[session.UserID()]
+			if !visible {
+				continue
+			}
+			frame = projected
+		}
+
+		if err := session.deliver(publication, frame); err != nil {
 			h.log.Warn("dropping session",
 				"session", id,
 				"user", string(session.UserID()),

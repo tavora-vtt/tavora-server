@@ -89,9 +89,37 @@ hand a session to anyone who asks.
 
 `document.patch` is the first real intent and runs the whole path from
 [concept doc 02](https://github.com/tavora-vtt/tavora-docs/blob/main/concept/02-architecture.md):
-authorize, apply, append the event, fan out. Authorization currently goes through
-`AllowAllAuthorizer`, which is deliberately named so it is greppable and cannot be mistaken
-for a permission model. The real one arrives with M1.
+authorize, apply, append the event, fan out. Authorization, mutation and projection all
+happen inside one transaction, so what a recipient is shown is consistent with what was
+committed.
+
+## Permissions
+
+`internal/core/perm` is the pure part: roles, ownership levels, field visibility, and one
+resolution function with no I/O in it, which is what makes the matrix exhaustively
+testable. `internal/core/access` is the part that reads inputs from storage and applies it.
+
+Three layers resolve in order, most specific first: the world role, then per-document
+ownership (explicit user entry, document default, folder default, world default), then
+field visibility from the system schema.
+
+Two properties are worth stating because they are easy to get wrong.
+
+**Redaction removes paths rather than nulling them**, so absence is indistinguishable from
+non-existence, and a player never learns that a field exists.
+
+**Fan-out is per recipient, and the projection is precomputed.** The intent handler
+resolves every member's view inside the transaction and hands the hub a map from user to
+frame. The hub goroutine then does map lookups and never touches storage, which is what
+keeps fan-out from blocking on I/O.
+
+The role comes from `world_members`, never from the ticket. A ticket that claims `gm` for a
+user the world records as a player connects as a player, and a ticket for a non-member is
+refused. There is a test for each.
+
+Catch-up is redacted the same way. Replaying raw event payloads would have leaked, because
+the event log stores the patch that was requested rather than the view a recipient is
+entitled to, so replay projects the current document instead.
 
 The wire format is Protobuf, generated from `tavora-protocol`. `/ws?format=json` switches
 the same endpoint to a readable JSON encoding of the same frames, for reading traffic in
@@ -105,9 +133,10 @@ type. A cursor frame is 62 bytes as Protobuf and 147 as JSON.
 
 ## Status
 
-Milestone M0. HTTP surface, graceful shutdown, the storage port with both backends, and the
-WebSocket gateway with lanes, backpressure and reconnect catch-up are in place. The scene
-model and permissions land next.
+M0 is complete and M1 is under way. HTTP surface, graceful shutdown, the storage port with
+both backends, the WebSocket gateway with lanes, backpressure and reconnect catch-up, and
+the permission model with field-level redaction are in place. Authentication and the scene
+model land next.
 
 ## Licence
 

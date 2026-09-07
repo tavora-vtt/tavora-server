@@ -153,7 +153,7 @@ func TestWebSocketRoundTripOverHTTP(t *testing.T) {
 				t.Errorf("ack request id = %d", ack.Ack.RequestID)
 			}
 
-			var result DocumentPatchResult
+			var result DocumentView
 			if err := json.Unmarshal(ack.Ack.Result, &result); err != nil {
 				t.Fatalf("decode result: %v", err)
 			}

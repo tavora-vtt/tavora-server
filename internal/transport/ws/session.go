@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tavora-vtt/tavora-server/internal/core/access"
+	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
 
@@ -22,16 +24,6 @@ type Conn interface {
 	Read(ctx context.Context) (data []byte, binary bool, err error)
 	Write(ctx context.Context, binary bool, data []byte) error
 	Close(reason string) error
-}
-
-type Authorizer interface {
-	AuthorizeIntent(ctx context.Context, session *Session, intent Intent) error
-}
-
-type AllowAllAuthorizer struct{}
-
-func (AllowAllAuthorizer) AuthorizeIntent(context.Context, *Session, Intent) error {
-	return nil
 }
 
 type IntentError struct {
@@ -71,7 +63,7 @@ type Deps struct {
 	Registry     *Registry
 	Tickets      *TicketStore
 	Router       *Router
-	Authorizer   Authorizer
+	Access       *access.Resolver
 	Log          *slog.Logger
 	DocumentCap  int
 	EphemeralCap int
@@ -100,9 +92,6 @@ type Session struct {
 var sessionCounter atomic.Uint64
 
 func NewSession(conn Conn, codec Codec, deps Deps) *Session {
-	if deps.Authorizer == nil {
-		deps.Authorizer = AllowAllAuthorizer{}
-	}
 	id := fmt.Sprintf("s%d-%d", time.Now().UnixNano(), sessionCounter.Add(1))
 
 	return &Session{
@@ -150,14 +139,14 @@ func (s *Session) Subscribed(channel string) bool {
 	return present
 }
 
-func (s *Session) deliver(publication Publication) error {
+func (s *Session) deliver(publication Publication, frame Frame) error {
 	switch publication.Lane {
 	case LaneEphemeral:
-		return s.outbox.PushEphemeral(publication.Key, publication.Frame)
+		return s.outbox.PushEphemeral(publication.Key, frame)
 	case LaneControl:
-		return s.outbox.PushControl(publication.Frame)
+		return s.outbox.PushControl(frame)
 	default:
-		return s.outbox.PushDocument(publication.Frame)
+		return s.outbox.PushDocument(frame)
 	}
 }
 
@@ -242,8 +231,14 @@ func (s *Session) authenticate(parent context.Context) (*Hello, error) {
 
 	s.userID = ticket.UserID
 	s.worldID = ticket.WorldID
-	s.role = ticket.Role
-	s.log = s.log.With("user", string(s.userID), "world", string(s.worldID))
+
+	role, err := s.resolveRole(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.role = string(role)
+
+	s.log = s.log.With("user", string(s.userID), "world", string(s.worldID), "role", s.role)
 	s.Subscribe(WorldChannel(s.worldID), UserChannel(s.userID))
 
 	return hello, nil
@@ -283,6 +278,25 @@ func (s *Session) welcome(ctx context.Context, hello *Hello) error {
 	return s.outbox.PrependDocument(replay)
 }
 
+func (s *Session) resolveRole(ctx context.Context) (perm.Role, error) {
+	var role perm.Role
+	err := s.deps.Store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		role, readErr = s.deps.Access.RoleOf(ctx, q, s.worldID, s.userID)
+		return readErr
+	})
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", ErrNotAMember, err)
+	}
+	return role, nil
+}
+
+func (s *Session) Subject() perm.Subject {
+	return perm.Subject{UserID: s.userID, Role: perm.Role(s.role)}
+}
+
+func (s *Session) Access() *access.Resolver { return s.deps.Access }
+
 func (s *Session) currentWorld(ctx context.Context) (*storage.World, error) {
 	var world *storage.World
 	err := s.deps.Store.ReadOnly(ctx, func(q storage.Query) error {
@@ -297,34 +311,81 @@ func (s *Session) currentWorld(ctx context.Context) (*storage.World, error) {
 }
 
 func (s *Session) replayFrames(ctx context.Context, fromSeq int64) ([]Frame, error) {
-	var events []storage.Event
+	var frames []Frame
+
 	err := s.deps.Store.ReadOnly(ctx, func(q storage.Query) error {
-		var readErr error
-		events, readErr = q.EventsSince(ctx, s.worldID, fromSeq, catchUpLimit)
-		return readErr
+		events, err := q.EventsSince(ctx, s.worldID, fromSeq, catchUpLimit)
+		if err != nil {
+			return err
+		}
+
+		frames = make([]Frame, 0, len(events))
+		for _, event := range events {
+			if !audienceAllows(event.Audience, s.userID) {
+				continue
+			}
+
+			payload, include, err := s.replayPayload(ctx, q, event)
+			if err != nil {
+				return err
+			}
+			if !include {
+				continue
+			}
+
+			frames = append(frames, Frame{
+				Lane: LaneDocument,
+				Type: TypeEvent,
+				Event: &Event{
+					Seq:     event.Seq,
+					Kind:    event.Kind,
+					WorldID: string(event.WorldID),
+					SceneID: string(event.SceneID),
+					Payload: payload,
+				},
+			})
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("catch up: %w", err)
 	}
-
-	frames := make([]Frame, 0, len(events))
-	for _, event := range events {
-		if !audienceAllows(event.Audience, s.userID) {
-			continue
-		}
-		frames = append(frames, Frame{
-			Lane: LaneDocument,
-			Type: TypeEvent,
-			Event: &Event{
-				Seq:     event.Seq,
-				Kind:    event.Kind,
-				WorldID: string(event.WorldID),
-				SceneID: string(event.SceneID),
-				Payload: event.Payload,
-			},
-		})
-	}
 	return frames, nil
+}
+
+func (s *Session) replayPayload(ctx context.Context, q storage.Query, event storage.Event) (json.RawMessage, bool, error) {
+	if event.TargetKind != "document" || event.TargetID == "" {
+		return event.Payload, true, nil
+	}
+
+	doc, err := q.GetDocument(ctx, s.worldID, event.TargetID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	subject := s.Subject()
+
+	grant, err := s.deps.Access.Grant(ctx, q, subject, doc)
+	if err != nil {
+		return nil, false, err
+	}
+
+	visible, send, err := perm.RedactDocument(doc, subject, grant, s.deps.Access.Policy())
+	if err != nil {
+		return nil, false, err
+	}
+	if !send {
+		return nil, false, nil
+	}
+
+	payload, err := json.Marshal(viewOf(access.View{Subject: subject, Grant: grant, Document: visible}, event.Seq))
+	if err != nil {
+		return nil, false, err
+	}
+	return payload, true, nil
 }
 
 func (s *Session) readLoop(ctx context.Context) error {
@@ -395,11 +456,6 @@ func (s *Session) handleIntent(ctx context.Context, frame Frame) {
 	handler, present := s.deps.Router.lookup(intent.Kind)
 	if !present {
 		_ = s.outbox.PushDocument(errorFrame(intent.RequestID, CodeUnsupported, "core.ws.unknownIntent"))
-		return
-	}
-
-	if err := s.deps.Authorizer.AuthorizeIntent(ctx, s, intent); err != nil {
-		_ = s.outbox.PushDocument(errorFrame(intent.RequestID, CodeForbidden, "core.ws.forbidden"))
 		return
 	}
 
@@ -489,9 +545,15 @@ func audienceAllows(audience json.RawMessage, userID storage.ID) bool {
 	return false
 }
 
+var ErrNotAMember = errors.New("ws: not a member of this world")
+
 func codeForHandshake(err error) string {
-	if errors.Is(err, ErrTicketInvalid) {
+	switch {
+	case errors.Is(err, ErrTicketInvalid):
 		return CodeUnauthorized
+	case errors.Is(err, ErrNotAMember):
+		return CodeForbidden
+	default:
+		return CodeBadRequest
 	}
-	return CodeBadRequest
 }

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tavora-vtt/tavora-server/internal/core/access"
+	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 	"github.com/tavora-vtt/tavora-server/internal/storage/sqlite"
 )
@@ -135,15 +137,35 @@ func newTestStore(t *testing.T) storage.Store {
 		}); err != nil {
 			return err
 		}
+
+		members := []storage.Member{
+			{WorldID: testWorld, UserID: "user-1", Role: string(perm.RoleGM)},
+			{WorldID: testWorld, UserID: "user-2", Role: string(perm.RolePlayer)},
+			{WorldID: testWorld, UserID: "user-3", Role: string(perm.RolePlayer)},
+		}
+		for i := range members {
+			if err := tx.PutMember(ctx, &members[i]); err != nil {
+				return err
+			}
+		}
+
 		return tx.PutDocument(ctx, &storage.Document{
 			WorldID: testWorld, ID: testDoc, Kind: "actor", Subtype: "vampire",
-			Name: "Nadia", Data: json.RawMessage(`{"hunger":2}`),
+			Name:      "Nadia",
+			Data:      json.RawMessage(`{"hunger":2,"clan":"Ventrue","secrets":{"sire":"unknown"}}`),
+			Ownership: json.RawMessage(`{"user-2":"observer"}`),
 		})
 	})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return store
+}
+
+func testPolicy() perm.FieldPolicy {
+	return perm.NewStaticPolicy().
+		Set("actor", "vampire", "secrets", perm.VisibilityGM).
+		Set("actor", "vampire", "hunger", perm.VisibilityObserver)
 }
 
 type harness struct {
@@ -171,6 +193,7 @@ func newHarness(t *testing.T) *harness {
 			Registry: registry,
 			Tickets:  tickets,
 			Router:   router,
+			Access:   access.NewResolver(store, testPolicy()),
 			Log:      discardLogger(),
 		},
 		registry: registry,
@@ -421,7 +444,7 @@ func TestPatchAcksAndFansOutToOtherSession(t *testing.T) {
 		t.Errorf("ack request id = %d", ack.Ack.RequestID)
 	}
 
-	var result DocumentPatchResult
+	var result DocumentView
 	if err := json.Unmarshal(ack.Ack.Result, &result); err != nil {
 		t.Fatalf("decode ack result: %v", err)
 	}

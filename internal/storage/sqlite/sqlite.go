@@ -160,5 +160,14 @@ func (dialect) Migrations() [][]string {
 			)`,
 			`CREATE INDEX world_events_ts_idx ON world_events (world_id, ts)`,
 		},
+		{
+			`CREATE TABLE world_members (
+				world_id  TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+				user_id   TEXT NOT NULL,
+				role      TEXT NOT NULL,
+				joined_at TEXT NOT NULL,
+				PRIMARY KEY (world_id, user_id)
+			)`,
+		},
 	}
 }

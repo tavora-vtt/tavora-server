@@ -8,6 +8,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/tavora-vtt/tavora-server/internal/core/access"
+	"github.com/tavora-vtt/tavora-server/internal/core/perm"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
 
@@ -32,6 +34,9 @@ func NewGateway(deps Deps, devTickets bool) *Gateway {
 	}
 	if deps.Registry == nil {
 		deps.Registry = NewRegistry(deps.Log)
+	}
+	if deps.Access == nil {
+		deps.Access = access.NewResolver(deps.Store, perm.OpenPolicy{})
 	}
 	return &Gateway{deps: deps, devTickets: devTickets, allowJSON: devTickets}
 }

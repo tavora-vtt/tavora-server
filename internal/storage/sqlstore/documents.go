@@ -101,6 +101,59 @@ func (c *conn) PutWorld(ctx context.Context, world *storage.World) error {
 	return err
 }
 
+func (c *conn) GetMember(ctx context.Context, worldID, userID storage.ID) (*storage.Member, error) {
+	var member storage.Member
+
+	err := c.queryRow(ctx,
+		`SELECT world_id, user_id, role, joined_at FROM world_members WHERE world_id = ? AND user_id = ?`,
+		worldID, userID,
+	).Scan(&member.WorldID, &member.UserID, &member.Role, timeScanner{dst: &member.JoinedAt})
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: member %s in world %s", storage.ErrNotFound, userID, worldID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &member, nil
+}
+
+func (c *conn) ListMembers(ctx context.Context, worldID storage.ID) ([]storage.Member, error) {
+	rows, err := c.query(ctx,
+		`SELECT world_id, user_id, role, joined_at FROM world_members WHERE world_id = ? ORDER BY user_id`,
+		worldID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	members := make([]storage.Member, 0, 8)
+	for rows.Next() {
+		var member storage.Member
+		if err := rows.Scan(&member.WorldID, &member.UserID, &member.Role,
+			timeScanner{dst: &member.JoinedAt}); err != nil {
+			return nil, err
+		}
+		members = append(members, member)
+	}
+	return members, rows.Err()
+}
+
+func (c *conn) PutMember(ctx context.Context, member *storage.Member) error {
+	if err := c.requireWritable(); err != nil {
+		return err
+	}
+	if member.JoinedAt.IsZero() {
+		member.JoinedAt = time.Now().UTC()
+	}
+
+	_, err := c.exec(ctx,
+		`INSERT INTO world_members (world_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT (world_id, user_id) DO UPDATE SET role = excluded.role`,
+		member.WorldID, member.UserID, member.Role, c.dialect.TimeArg(member.JoinedAt))
+	return err
+}
+
 func (c *conn) GetDocument(ctx context.Context, worldID, id storage.ID) (*storage.Document, error) {
 	query := fmt.Sprintf(`SELECT %s FROM documents WHERE world_id = ? AND id = ?`, c.documentColumns())
 
