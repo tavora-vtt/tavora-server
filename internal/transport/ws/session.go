@@ -12,6 +12,7 @@ import (
 
 	"github.com/tavora-vtt/tavora-server/internal/core/access"
 	"github.com/tavora-vtt/tavora-server/internal/core/perm"
+	"github.com/tavora-vtt/tavora-server/internal/core/sight"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
 
@@ -405,6 +406,14 @@ func (s *Session) replayPayload(ctx context.Context, q storage.Query, event stor
 		return nil, false, err
 	}
 	if !send {
+		return nil, false, nil
+	}
+
+	inSight, err := sight.CanSee(ctx, q, s.deps.Access, subject, s.worldID, doc)
+	if err != nil {
+		return nil, false, err
+	}
+	if !inSight {
 		return nil, false, nil
 	}
 

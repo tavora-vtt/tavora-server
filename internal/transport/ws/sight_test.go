@@ -325,3 +325,39 @@ func TestTokenArtReachesEveryoneWhoCanSeeTheToken(t *testing.T) {
 		t.Errorf("the token kept %q as its art, want %q", stored.Img, art)
 	}
 }
+
+func TestCatchUpDoesNotReplayATokenBehindAWall(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	moveToken(t, gm, 1, "far-token", 9, 6)
+	gm.nextOfType(t, TypeAck)
+
+	player, _ := h.connect(t, "user-2", 0)
+	if raw := string(drainRaw(t, player, 400*time.Millisecond)); strings.Contains(raw, "far-token") ||
+		strings.Contains(raw, "Sheriff") {
+		t.Errorf("catching up replayed a token behind a wall:\n%s", raw)
+	}
+
+	second, _ := h.connect(t, "user-1", 0)
+	if raw := string(drainRaw(t, second, 400*time.Millisecond)); !strings.Contains(raw, "far-token") {
+		t.Errorf("the event was not in the replay window at all, so the test proves nothing:\n%s", raw)
+	}
+}
+
+func TestCatchUpStillReplaysWhatThePlayerCanSee(t *testing.T) {
+	h := newHarness(t)
+	seedWalledScene(t, h)
+
+	gm, _ := h.connect(t, "user-1", 0)
+	moveToken(t, gm, 1, "own-token", 1, 6)
+	gm.nextOfType(t, TypeAck)
+
+	player, _ := h.connect(t, "user-2", 0)
+
+	raw := string(drainRaw(t, player, 400*time.Millisecond))
+	if !strings.Contains(raw, "own-token") {
+		t.Errorf("catching up dropped a token the player owns:\n%s", raw)
+	}
+}

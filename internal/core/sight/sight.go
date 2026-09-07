@@ -173,3 +173,37 @@ func VisibleTokens(
 	}
 	return visible, nil
 }
+
+// CanSee answers for one token what Filter asks per recipient and VisibleTokens asks per
+// token. Catch-up needs this shape, because it walks events one at a time.
+func CanSee(
+	ctx context.Context,
+	q storage.Query,
+	resolver *access.Resolver,
+	subject perm.Subject,
+	worldID storage.ID,
+	token *storage.Document,
+) (bool, error) {
+	if token.Kind != "token" || token.ParentID == "" || subject.Role.IsStaff() {
+		return true, nil
+	}
+
+	target, ok := pointOf(token)
+	if !ok {
+		return true, nil
+	}
+
+	blockers, err := BlockersOf(ctx, q, worldID, token.ParentID)
+	if err != nil {
+		return false, err
+	}
+	if len(blockers) == 0 {
+		return true, nil
+	}
+
+	points, err := ViewpointsOf(ctx, q, resolver, subject, worldID, token.ParentID)
+	if err != nil {
+		return false, err
+	}
+	return vision.VisibleFromAny(points, target, blockers), nil
+}

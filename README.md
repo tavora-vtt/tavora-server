@@ -262,6 +262,11 @@ Catch-up is redacted the same way. Replaying raw event payloads would have leake
 the event log stores the patch that was requested rather than the view a recipient is
 entitled to, so replay projects the current document instead.
 
+Catch-up also runs the line-of-sight check, which it did not at first. Redaction alone was
+not enough: a player reconnecting replayed every token that had moved, including the ones
+behind a wall, because sight was filtered on live fan-out only. Both paths now ask the same
+question, and a test connects a player after the move to prove it.
+
 The wire format is Protobuf, generated from `tavora-protocol`. `/ws?format=json` switches
 the same endpoint to a readable JSON encoding of the same frames, for reading traffic in
 devtools; it is off unless `TAVORA_PROTOCOL_JSON=1`.
