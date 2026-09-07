@@ -10,12 +10,13 @@ import (
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 )
 
-const worldColumns = `id, slug, title, system_id, system_version, default_locale, %s, event_seq, created_at, archived_at`
+const worldColumns = `id, slug, title, system_id, system_version, default_locale, active_scene, %s, event_seq, created_at, archived_at`
 
 func (c *conn) scanWorld(scan func(...any) error) (*storage.World, error) {
 	var world storage.World
 	err := scan(
 		&world.ID, &world.Slug, &world.Title, &world.SystemID, &world.SystemVersion, &world.DefaultLocale,
+		&world.ActiveScene,
 		jsonScanner{dst: &world.Settings, fallback: "{}"},
 		&world.EventSeq,
 		timeScanner{dst: &world.CreatedAt},

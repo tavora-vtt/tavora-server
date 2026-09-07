@@ -34,9 +34,10 @@ type TokenData struct {
 }
 
 type sceneView struct {
-	ID   string    `json:"id"`
-	Name string    `json:"name"`
-	Data SceneData `json:"data"`
+	ID     string    `json:"id"`
+	Name   string    `json:"name"`
+	Active bool      `json:"active"`
+	Data   SceneData `json:"data"`
 }
 
 type tokenView struct {
@@ -87,6 +88,11 @@ func (d AuthDeps) listScenesHandler() http.HandlerFunc {
 
 		var views []sceneView
 		err := d.Store.ReadOnly(r.Context(), func(q storage.Query) error {
+			world, err := q.GetWorld(r.Context(), worldID)
+			if err != nil {
+				return err
+			}
+
 			documents, err := q.ListDocuments(r.Context(), worldID, storage.DocumentFilter{Kind: KindScene})
 			if err != nil {
 				return err
@@ -95,7 +101,12 @@ func (d AuthDeps) listScenesHandler() http.HandlerFunc {
 			for _, document := range documents {
 				var data SceneData
 				_ = json.Unmarshal(document.Data, &data)
-				views = append(views, sceneView{ID: string(document.ID), Name: document.Name, Data: data})
+				views = append(views, sceneView{
+					ID:     string(document.ID),
+					Name:   document.Name,
+					Active: document.ID == world.ActiveScene,
+					Data:   data,
+				})
 			}
 			return nil
 		})
@@ -147,7 +158,9 @@ func (d AuthDeps) createSceneHandler() http.HandlerFunc {
 
 		var view SceneData
 		_ = json.Unmarshal(document.Data, &view)
-		writeJSON(w, http.StatusCreated, sceneView{ID: string(document.ID), Name: document.Name, Data: view})
+		writeJSON(w, http.StatusCreated, sceneView{
+			ID: string(document.ID), Name: document.Name, Data: view,
+		})
 	}
 }
 

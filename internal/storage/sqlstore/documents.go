@@ -51,12 +51,13 @@ func (c *conn) scanDocument(scan func(...any) error) (*storage.Document, error) 
 
 func (c *conn) GetWorld(ctx context.Context, id storage.ID) (*storage.World, error) {
 	query := fmt.Sprintf(
-		`SELECT id, slug, title, system_id, system_version, default_locale, %s, event_seq, created_at, archived_at
+		`SELECT id, slug, title, system_id, system_version, default_locale, active_scene, %s, event_seq, created_at, archived_at
 		 FROM worlds WHERE id = ?`, c.dialect.JSONColumn("settings"))
 
 	var world storage.World
 	err := c.queryRow(ctx, query, id).Scan(
 		&world.ID, &world.Slug, &world.Title, &world.SystemID, &world.SystemVersion, &world.DefaultLocale,
+		&world.ActiveScene,
 		jsonScanner{dst: &world.Settings, fallback: "{}"},
 		&world.EventSeq,
 		timeScanner{dst: &world.CreatedAt},
@@ -83,16 +84,17 @@ func (c *conn) PutWorld(ctx context.Context, world *storage.World) error {
 	}
 
 	query := fmt.Sprintf(
-		`INSERT INTO worlds (id, slug, title, system_id, system_version, default_locale, settings, event_seq, created_at, archived_at)
-		 VALUES (?, ?, ?, ?, ?, ?, %s, ?, ?, ?)
+		`INSERT INTO worlds (id, slug, title, system_id, system_version, default_locale, active_scene, settings, event_seq, created_at, archived_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, %s, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   slug = excluded.slug, title = excluded.title, system_id = excluded.system_id,
 		   system_version = excluded.system_version, default_locale = excluded.default_locale,
+		   active_scene = excluded.active_scene,
 		   settings = excluded.settings, archived_at = excluded.archived_at`, c.dialect.JSONArg())
 
 	_, err := c.exec(ctx, query,
 		world.ID, world.Slug, world.Title, world.SystemID, world.SystemVersion, world.DefaultLocale,
-		jsonArg(world.Settings, "{}"), world.EventSeq,
+		string(world.ActiveScene), jsonArg(world.Settings, "{}"), world.EventSeq,
 		c.dialect.TimeArg(world.CreatedAt), c.dialect.TimePtrArg(world.ArchivedAt),
 	)
 	if err != nil && c.dialect.IsUniqueViolation(err) {

@@ -666,3 +666,88 @@ func loadDocument(t *testing.T, store storage.Store) *storage.Document {
 	}
 	return doc
 }
+
+func TestSceneActivateReachesEveryone(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	err := h.store.Tx(ctx, func(tx storage.Tx) error {
+		for _, id := range []storage.ID{"scene-1", "scene-2"} {
+			if err := tx.PutDocument(ctx, &storage.Document{
+				WorldID: testWorld, ID: id, Kind: "scene", Name: string(id),
+				Data:      json.RawMessage(`{"width":1000,"height":800,"gridSize":100}`),
+				Ownership: json.RawMessage(`{"default":"observer"}`),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed scenes: %v", err)
+	}
+
+	gm, _ := h.connect(t, "user-1", 0)
+	player, _ := h.connect(t, "user-2", 0)
+
+	payload, _ := json.Marshal(SceneActivatePayload{SceneID: "scene-2"})
+	gm.send(t, Frame{
+		Lane:   LaneDocument,
+		Type:   TypeIntent,
+		Intent: &Intent{RequestID: 1, Kind: "scene.activate", Payload: payload},
+	})
+
+	ack := gm.nextOfType(t, TypeAck)
+	var activated SceneActivated
+	if err := json.Unmarshal(ack.Ack.Result, &activated); err != nil {
+		t.Fatalf("decode ack: %v", err)
+	}
+	if activated.SceneID != "scene-2" {
+		t.Errorf("activated = %+v", activated)
+	}
+
+	event := player.nextOfType(t, TypeEvent)
+	if event.Event.Kind != "scene.activate" || event.Event.SceneID != "scene-2" {
+		t.Errorf("player event = %+v", event.Event)
+	}
+
+	var world *storage.World
+	_ = h.store.ReadOnly(ctx, func(q storage.Query) error {
+		var readErr error
+		world, readErr = q.GetWorld(ctx, testWorld)
+		return readErr
+	})
+	if world.ActiveScene != "scene-2" {
+		t.Errorf("stored active scene = %q", world.ActiveScene)
+	}
+}
+
+func TestOnlyStaffCanActivateAScene(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	err := h.store.Tx(ctx, func(tx storage.Tx) error {
+		return tx.PutDocument(ctx, &storage.Document{
+			WorldID: testWorld, ID: "scene-1", Kind: "scene", Name: "Chantry",
+			Data:      json.RawMessage(`{"width":1000,"height":800,"gridSize":100}`),
+			Ownership: json.RawMessage(`{"default":"observer"}`),
+		})
+	})
+	if err != nil {
+		t.Fatalf("seed scene: %v", err)
+	}
+
+	player, _ := h.connect(t, "user-2", 0)
+
+	payload, _ := json.Marshal(SceneActivatePayload{SceneID: "scene-1"})
+	player.send(t, Frame{
+		Lane:   LaneDocument,
+		Type:   TypeIntent,
+		Intent: &Intent{RequestID: 4, Kind: "scene.activate", Payload: payload},
+	})
+
+	frame := player.nextOfType(t, TypeError)
+	if frame.Error.Code != CodeForbidden {
+		t.Errorf("error code = %q, want %q", frame.Error.Code, CodeForbidden)
+	}
+}

@@ -36,9 +36,107 @@ type TokenMovePayload struct {
 	Y       float64 `json:"y"`
 }
 
+type SceneActivatePayload struct {
+	SceneID string `json:"sceneId"`
+}
+
+type SceneActivated struct {
+	SceneID string `json:"sceneId"`
+	Name    string `json:"name"`
+	Seq     int64  `json:"seq"`
+}
+
 func RegisterCoreIntents(router *Router) {
 	router.Handle("document.patch", handleDocumentPatch)
 	router.Handle("scene.token.move", handleTokenMove)
+	router.Handle("scene.activate", handleSceneActivate)
+}
+
+func handleSceneActivate(ctx context.Context, session *Session, intent Intent) (IntentResult, error) {
+	var payload SceneActivatePayload
+	if err := json.Unmarshal(intent.Payload, &payload); err != nil {
+		return IntentResult{}, NewIntentError(CodeBadRequest, "core.intent.malformedPayload")
+	}
+	if payload.SceneID == "" {
+		return IntentResult{}, NewIntentError(CodeBadRequest, "core.intent.missingSceneId")
+	}
+
+	if !session.Subject().Role.IsStaff() {
+		return IntentResult{}, NewIntentError(CodeForbidden, "core.intent.gameMasterOnly")
+	}
+
+	var activated SceneActivated
+
+	err := session.Store().Tx(ctx, func(tx storage.Tx) error {
+		scene, err := tx.GetDocument(ctx, session.WorldID(), storage.ID(payload.SceneID))
+		if err != nil {
+			return err
+		}
+		if scene.Kind != "scene" {
+			return storage.ErrNotFound
+		}
+
+		world, err := tx.GetWorld(ctx, session.WorldID())
+		if err != nil {
+			return err
+		}
+		world.ActiveScene = scene.ID
+
+		if err := tx.PutWorld(ctx, world); err != nil {
+			return err
+		}
+
+		encoded, err := json.Marshal(SceneActivatePayload{SceneID: payload.SceneID})
+		if err != nil {
+			return err
+		}
+
+		seq, err := tx.AppendEvent(ctx, storage.Event{
+			WorldID:     session.WorldID(),
+			ActorUserID: session.UserID(),
+			Kind:        "scene.activate",
+			TargetKind:  "document",
+			TargetID:    scene.ID,
+			SceneID:     scene.ID,
+			Payload:     encoded,
+		})
+		if err != nil {
+			return err
+		}
+
+		activated = SceneActivated{SceneID: string(scene.ID), Name: scene.Name, Seq: seq}
+		return nil
+	})
+
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+		return IntentResult{}, NewIntentError(CodeNotFound, "core.intent.sceneNotFound")
+	case err != nil:
+		return IntentResult{}, err
+	}
+
+	encoded, err := json.Marshal(activated)
+	if err != nil {
+		return IntentResult{}, err
+	}
+
+	session.Hub().Publish(Publication{
+		Channel: WorldChannel(session.WorldID()),
+		Lane:    LaneDocument,
+		Frame: Frame{
+			Lane: LaneDocument,
+			Type: TypeEvent,
+			Event: &Event{
+				Seq:     activated.Seq,
+				Kind:    "scene.activate",
+				WorldID: string(session.WorldID()),
+				SceneID: activated.SceneID,
+				Payload: encoded,
+			},
+		},
+	})
+
+	return IntentResult{Seq: activated.Seq, Result: encoded}, nil
 }
 
 func handleTokenMove(ctx context.Context, session *Session, intent Intent) (IntentResult, error) {

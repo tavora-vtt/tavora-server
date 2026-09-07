@@ -23,6 +23,7 @@ type World struct {
 	SystemID      string
 	SystemVersion string
 	DefaultLocale string
+	ActiveScene   ID
 	Settings      json.RawMessage
 	EventSeq      int64
 	CreatedAt     time.Time

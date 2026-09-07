@@ -206,5 +206,8 @@ func (dialect) Migrations() [][]string {
 			)`,
 			`CREATE INDEX invites_world_idx ON invites (world_id)`,
 		},
+		{
+			`ALTER TABLE worlds ADD COLUMN active_scene TEXT NOT NULL DEFAULT ''`,
+		},
 	}
 }
