@@ -14,6 +14,7 @@ import (
 const (
 	KindScene = "scene"
 	KindToken = "token"
+	KindActor = "actor"
 )
 
 type SceneData struct {
@@ -276,5 +277,210 @@ func (d AuthDeps) createTokenHandler() http.HandlerFunc {
 		writeJSON(w, http.StatusCreated, tokenView{
 			ID: string(document.ID), Name: document.Name, Data: document.Data,
 		})
+	}
+}
+
+type actorView struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Subtype   string          `json:"subtype"`
+	Data      json.RawMessage `json:"data"`
+	Ownership json.RawMessage `json:"ownership,omitempty"`
+	CanEdit   bool            `json:"canEdit"`
+}
+
+type createActorRequest struct {
+	Name    string `json:"name"`
+	Subtype string `json:"subtype"`
+}
+
+func defaultVampireData() map[string]any {
+	return map[string]any{
+		"clan":   "",
+		"hunger": 1,
+		"attributes": map[string]any{
+			"strength": 1, "dexterity": 1, "stamina": 1,
+			"charisma": 1, "manipulation": 1, "composure": 1,
+			"intelligence": 1, "wits": 1, "resolve": 1,
+		},
+		"health":    map[string]any{"superficial": 0, "aggravated": 0, "max": 4},
+		"willpower": map[string]any{"superficial": 0, "aggravated": 0, "max": 2},
+		"notes":     "",
+	}
+}
+
+func (d AuthDeps) listActorsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		worldID := storage.ID(r.PathValue("worldId"))
+
+		user, ok := d.requireRole(w, r, worldID, false)
+		if !ok {
+			return
+		}
+
+		var views []actorView
+		err := d.Store.ReadOnly(r.Context(), func(q storage.Query) error {
+			role, err := d.Access.RoleOf(r.Context(), q, worldID, user.ID)
+			if err != nil {
+				return err
+			}
+			subject := perm.Subject{UserID: user.ID, Role: role}
+
+			documents, err := q.ListDocuments(r.Context(), worldID, storage.DocumentFilter{Kind: KindActor})
+			if err != nil {
+				return err
+			}
+
+			views = make([]actorView, 0, len(documents))
+			for _, document := range documents {
+				grant, err := d.Access.Grant(r.Context(), q, subject, document)
+				if err != nil {
+					return err
+				}
+				visible, send, err := perm.RedactDocument(document, subject, grant, d.Access.Policy())
+				if err != nil {
+					return err
+				}
+				if !send {
+					continue
+				}
+				views = append(views, actorView{
+					ID:        string(visible.ID),
+					Name:      visible.Name,
+					Subtype:   visible.Subtype,
+					Data:      visible.Data,
+					Ownership: visible.Ownership,
+					CanEdit:   grant.CanEdit(),
+				})
+			}
+			return nil
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{Code: "internal", MessageKey: "core.api.internalError"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, views)
+	}
+}
+
+func (d AuthDeps) createActorHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		worldID := storage.ID(r.PathValue("worldId"))
+
+		actor, ok := d.requireRole(w, r, worldID, true)
+		if !ok {
+			return
+		}
+
+		var body createActorRequest
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if strings.TrimSpace(body.Name) == "" {
+			body.Name = "New character"
+		}
+		if body.Subtype == "" {
+			body.Subtype = "vampire"
+		}
+
+		data, err := json.Marshal(defaultVampireData())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{Code: "internal", MessageKey: "core.api.internalError"})
+			return
+		}
+
+		ownership, err := json.Marshal(map[string]string{
+			string(actor.ID): "owner",
+			"default":        "limited",
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{Code: "internal", MessageKey: "core.api.internalError"})
+			return
+		}
+
+		document := &storage.Document{
+			WorldID:       worldID,
+			ID:            auth.GenerateID("actor"),
+			Kind:          KindActor,
+			Subtype:       body.Subtype,
+			Name:          strings.TrimSpace(body.Name),
+			Data:          data,
+			Ownership:     ownership,
+			SchemaVersion: "0.1.0",
+		}
+
+		if err := d.Store.Tx(r.Context(), func(tx storage.Tx) error {
+			return tx.PutDocument(r.Context(), document)
+		}); err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{Code: "internal", MessageKey: "core.api.internalError"})
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, actorView{
+			ID: string(document.ID), Name: document.Name, Subtype: document.Subtype,
+			Data: document.Data, Ownership: document.Ownership, CanEdit: true,
+		})
+	}
+}
+
+type actorAccessRequest struct {
+	UserID string `json:"userId"`
+	Level  string `json:"level"`
+}
+
+func (d AuthDeps) setActorAccessHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		worldID := storage.ID(r.PathValue("worldId"))
+		actorID := storage.ID(r.PathValue("actorId"))
+
+		if _, ok := d.requireRole(w, r, worldID, true); !ok {
+			return
+		}
+
+		var body actorAccessRequest
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		level, err := perm.ParseLevel(body.Level)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{Code: "bad_request", MessageKey: "core.world.unknownLevel"})
+			return
+		}
+
+		err = d.Store.Tx(r.Context(), func(tx storage.Tx) error {
+			document, err := tx.GetDocument(r.Context(), worldID, actorID)
+			if err != nil {
+				return err
+			}
+
+			acl, err := perm.ParseACL(document.Ownership)
+			if err != nil {
+				return err
+			}
+			acl[body.UserID] = level
+
+			encoded := make(map[string]string, len(acl))
+			for key, value := range acl {
+				encoded[key] = value.String()
+			}
+
+			ownership, err := json.Marshal(encoded)
+			if err != nil {
+				return err
+			}
+			document.Ownership = ownership
+			return tx.PutDocument(r.Context(), document)
+		})
+		if errors.Is(err, storage.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, apiError{Code: "not_found", MessageKey: "core.actor.unknown"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{Code: "internal", MessageKey: "core.api.internalError"})
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

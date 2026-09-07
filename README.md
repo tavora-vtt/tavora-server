@@ -156,6 +156,18 @@ Slugs are derived from the title when none is given, and a derived slug that col
 a numeric suffix rather than an error. A slug the user typed and that is taken is a 409,
 because they chose it.
 
+## Characters
+
+`GET/POST /api/worlds/{id}/actors` lists and creates character sheets, and
+`PUT .../actors/{id}/access` sets who may read or edit one. A new sheet belongs to the
+game master who created it and is `limited` to everyone else, so players see a name and
+nothing more until they are given the sheet.
+
+Editing goes through the ordinary `document.patch` intent, which means sheets inherit the
+whole path for free: authorization, the event log, per-recipient redaction and live
+fan-out. `canEdit` on the listing is the resolved grant, not a guess, and the server
+refuses a patch from someone who only has read access regardless of what the client shows.
+
 ## Chat and dice
 
 `chat.post` carries what a person typed. `chat.roll` carries an expression, and the server
