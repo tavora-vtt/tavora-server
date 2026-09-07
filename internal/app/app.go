@@ -30,6 +30,7 @@ type Config struct {
 	StorageDriver   string
 	StorageDSN      string
 	DevTickets      bool
+	JSONProtocol    bool
 	ShutdownTimeout time.Duration
 }
 
@@ -51,6 +52,9 @@ func ConfigFromEnv() Config {
 	}
 	if os.Getenv("TAVORA_DEV_UNSAFE_TICKETS") == "1" {
 		config.DevTickets = true
+	}
+	if os.Getenv("TAVORA_PROTOCOL_JSON") == "1" {
+		config.JSONProtocol = true
 	}
 	return config
 }
@@ -89,8 +93,13 @@ func New(config Config, log *slog.Logger) (*App, error) {
 		Log:      log,
 	}, config.DevTickets)
 
+	gateway.AllowJSONFormat(config.JSONProtocol || config.DevTickets)
+
 	if config.DevTickets {
 		log.Warn("unauthenticated development tickets are enabled, never do this in production")
+	}
+	if config.JSONProtocol {
+		log.Info("readable json protocol available at /ws?format=json")
 	}
 
 	handler := httpapi.NewRouter(httpapi.Deps{

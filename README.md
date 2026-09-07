@@ -19,6 +19,7 @@ curl localhost:30000/readyz
 | `TAVORA_STORAGE_DRIVER` | `sqlite` | `sqlite` or `postgres` |
 | `TAVORA_STORAGE_DSN` | `data/tavora.db` | File path, or a PostgreSQL connection string |
 | `TAVORA_DEV_UNSAFE_TICKETS` | unset | `1` opens an unauthenticated ticket endpoint. Development only |
+| `TAVORA_PROTOCOL_JSON` | unset | `1` allows `/ws?format=json`, a readable encoding for debugging |
 
 The default install has no external dependency: SQLite through a cgo-free driver, so the
 static binary from [ADR 0001](https://github.com/tavora-vtt/tavora-docs/blob/main/adr/0001-server-language.md)
@@ -89,9 +90,15 @@ authorize, apply, append the event, fan out. Authorization currently goes throug
 `AllowAllAuthorizer`, which is deliberately named so it is greppable and cannot be mistaken
 for a permission model. The real one arrives with M1.
 
-The wire format is a `Codec` interface with a JSON implementation. The Protobuf codec from
-`tavora-protocol` slots in behind the same interface once that module is reachable from a
-clean clone.
+The wire format is Protobuf, generated from `tavora-protocol`. `/ws?format=json` switches
+the same endpoint to a readable JSON encoding of the same frames, for reading traffic in
+devtools; it is off unless `TAVORA_PROTOCOL_JSON=1`.
+
+That JSON is deliberately not canonical Protobuf JSON: `protojson` base64-encodes `bytes`
+fields, and payloads are `bytes`, so the readable mode would render exactly the part you
+want to read as base64. Both encodings sit behind one `Codec` interface over one internal
+frame model, and a contract test asserts they decode to the same frame for every frame
+type. A cursor frame is 62 bytes as Protobuf and 147 as JSON.
 
 ## Status
 

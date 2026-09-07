@@ -19,6 +19,7 @@ const (
 type Gateway struct {
 	deps       Deps
 	devTickets bool
+	allowJSON  bool
 }
 
 func NewGateway(deps Deps, devTickets bool) *Gateway {
@@ -32,7 +33,18 @@ func NewGateway(deps Deps, devTickets bool) *Gateway {
 	if deps.Registry == nil {
 		deps.Registry = NewRegistry(deps.Log)
 	}
-	return &Gateway{deps: deps, devTickets: devTickets}
+	return &Gateway{deps: deps, devTickets: devTickets, allowJSON: devTickets}
+}
+
+func (g *Gateway) AllowJSONFormat(allow bool) {
+	g.allowJSON = allow
+}
+
+func (g *Gateway) codecFor(r *http.Request) Codec {
+	if r.URL.Query().Get("format") == "json" && g.allowJSON {
+		return JSONCodec{}
+	}
+	return ProtoCodec{}
 }
 
 func (g *Gateway) Tickets() *TicketStore { return g.deps.Tickets }
@@ -101,7 +113,7 @@ func (g *Gateway) WebSocketHandler() http.HandlerFunc {
 		}
 		conn.SetReadLimit(readLimitBytes)
 
-		session := NewSession(&coderConn{conn: conn}, JSONCodec{}, g.deps)
+		session := NewSession(&coderConn{conn: conn}, g.codecFor(r), g.deps)
 
 		if err := session.Serve(r.Context()); err != nil {
 			g.deps.Log.Debug("session ended", "session", session.ID(), "error", err)
