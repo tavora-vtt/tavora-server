@@ -62,6 +62,11 @@ func NewRouter(deps Deps) http.Handler {
 		mux.HandleFunc("POST /api/worlds/{worldId}/invites", deps.Auth.createInviteHandler())
 		mux.HandleFunc("DELETE /api/worlds/{worldId}/invites/{inviteId}", deps.Auth.revokeInviteHandler())
 
+		mux.HandleFunc("GET /api/worlds/{worldId}/scenes", deps.Auth.listScenesHandler())
+		mux.HandleFunc("POST /api/worlds/{worldId}/scenes", deps.Auth.createSceneHandler())
+		mux.HandleFunc("GET /api/worlds/{worldId}/scenes/{sceneId}/tokens", deps.Auth.listTokensHandler())
+		mux.HandleFunc("POST /api/worlds/{worldId}/scenes/{sceneId}/tokens", deps.Auth.createTokenHandler())
+
 		mux.HandleFunc("GET /api/invites/{token}", deps.Auth.previewInviteHandler())
 		mux.HandleFunc("POST /api/invites/{token}/accept", deps.Auth.acceptInviteHandler())
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tavora-vtt/tavora-server/internal/core/access"
 	"github.com/tavora-vtt/tavora-server/internal/core/auth"
 	"github.com/tavora-vtt/tavora-server/internal/storage"
 	"github.com/tavora-vtt/tavora-server/internal/transport/ws"
@@ -31,6 +32,7 @@ type AuthDeps struct {
 	Service       *auth.Service
 	Store         storage.Store
 	Tickets       *ws.TicketStore
+	Access        *access.Resolver
 	SecureCookies bool
 }
 

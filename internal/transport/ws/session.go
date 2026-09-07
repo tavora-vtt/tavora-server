@@ -39,7 +39,12 @@ func NewIntentError(code, messageKey string) *IntentError {
 	return &IntentError{Code: code, MessageKey: messageKey}
 }
 
-type IntentFunc func(ctx context.Context, session *Session, intent Intent) (json.RawMessage, error)
+type IntentResult struct {
+	Seq    int64
+	Result json.RawMessage
+}
+
+type IntentFunc func(ctx context.Context, session *Session, intent Intent) (IntentResult, error)
 
 type Router struct {
 	handlers map[string]IntentFunc
@@ -459,7 +464,7 @@ func (s *Session) handleIntent(ctx context.Context, frame Frame) {
 		return
 	}
 
-	result, err := handler(ctx, s, intent)
+	outcome, err := handler(ctx, s, intent)
 	if err != nil {
 		var intentErr *IntentError
 		if errors.As(err, &intentErr) {
@@ -471,13 +476,18 @@ func (s *Session) handleIntent(ctx context.Context, frame Frame) {
 		return
 	}
 
+	sequence := outcome.Seq
+	if sequence == 0 {
+		sequence = s.lastSeq.Load()
+	}
+
 	_ = s.outbox.PushDocument(Frame{
 		Lane: LaneDocument,
 		Type: TypeAck,
 		Ack: &Ack{
 			RequestID: intent.RequestID,
-			Seq:       s.lastSeq.Load(),
-			Result:    result,
+			Seq:       sequence,
+			Result:    outcome.Result,
 		},
 	})
 }

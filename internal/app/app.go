@@ -85,6 +85,8 @@ func New(config Config, log *slog.Logger) (*App, error) {
 	}
 	log.Info("storage ready", "backend", store.Backend())
 
+	resolver := access.NewResolver(store, perm.OpenPolicy{})
+
 	router := ws.NewRouter()
 	ws.RegisterCoreIntents(router)
 
@@ -95,7 +97,7 @@ func New(config Config, log *slog.Logger) (*App, error) {
 		Registry: ws.NewRegistry(log),
 		Tickets:  tickets,
 		Router:   router,
-		Access:   access.NewResolver(store, perm.OpenPolicy{}),
+		Access:   resolver,
 		Log:      log,
 	})
 
@@ -124,6 +126,7 @@ func New(config Config, log *slog.Logger) (*App, error) {
 			Service:       authService,
 			Store:         store,
 			Tickets:       tickets,
+			Access:        resolver,
 			SecureCookies: config.SecureCookies,
 		},
 		WebSocket: gateway.WebSocketHandler(),

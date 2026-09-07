@@ -30,26 +30,63 @@ type DocumentView struct {
 	UpdatedSeq int64           `json:"updatedSeq"`
 }
 
-func RegisterCoreIntents(router *Router) {
-	router.Handle("document.patch", handleDocumentPatch)
+type TokenMovePayload struct {
+	TokenID string  `json:"tokenId"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
 }
 
-func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (json.RawMessage, error) {
-	var payload DocumentPatchPayload
+func RegisterCoreIntents(router *Router) {
+	router.Handle("document.patch", handleDocumentPatch)
+	router.Handle("scene.token.move", handleTokenMove)
+}
+
+func handleTokenMove(ctx context.Context, session *Session, intent Intent) (IntentResult, error) {
+	var payload TokenMovePayload
 	if err := json.Unmarshal(intent.Payload, &payload); err != nil {
-		return nil, NewIntentError(CodeBadRequest, "core.intent.malformedPayload")
+		return IntentResult{}, NewIntentError(CodeBadRequest, "core.intent.malformedPayload")
 	}
-	if payload.ID == "" {
-		return nil, NewIntentError(CodeBadRequest, "core.intent.missingDocumentId")
+	if payload.TokenID == "" {
+		return IntentResult{}, NewIntentError(CodeBadRequest, "core.intent.missingDocumentId")
 	}
 
+	return applyPatch(ctx, session, storage.ID(payload.TokenID), storage.Patch{
+		Set: map[string]any{"x": payload.X, "y": payload.Y},
+	}, "scene.token.move", payload)
+}
+
+func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (IntentResult, error) {
+	var payload DocumentPatchPayload
+	if err := json.Unmarshal(intent.Payload, &payload); err != nil {
+		return IntentResult{}, NewIntentError(CodeBadRequest, "core.intent.malformedPayload")
+	}
+	if payload.ID == "" {
+		return IntentResult{}, NewIntentError(CodeBadRequest, "core.intent.missingDocumentId")
+	}
+
+	return applyPatch(ctx, session, storage.ID(payload.ID), storage.Patch{
+		Name:  payload.Name,
+		Sort:  payload.Sort,
+		Set:   payload.Set,
+		Unset: payload.Unset,
+	}, "document.patch", payload)
+}
+
+func applyPatch(
+	ctx context.Context,
+	session *Session,
+	documentID storage.ID,
+	patch storage.Patch,
+	eventKind string,
+	eventPayload any,
+) (IntentResult, error) {
 	var (
 		seq   int64
 		views map[storage.ID]access.View
 	)
 
 	err := session.Store().Tx(ctx, func(tx storage.Tx) error {
-		current, err := tx.GetDocument(ctx, session.WorldID(), storage.ID(payload.ID))
+		current, err := tx.GetDocument(ctx, session.WorldID(), documentID)
 		if err != nil {
 			return err
 		}
@@ -60,7 +97,7 @@ func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (
 			return err
 		}
 
-		eventPayload, err := json.Marshal(payload)
+		encoded, err := json.Marshal(eventPayload)
 		if err != nil {
 			return err
 		}
@@ -68,22 +105,18 @@ func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (
 		seq, err = tx.AppendEvent(ctx, storage.Event{
 			WorldID:     session.WorldID(),
 			ActorUserID: session.UserID(),
-			Kind:        "document.patch",
+			Kind:        eventKind,
 			TargetKind:  "document",
-			TargetID:    storage.ID(payload.ID),
-			Payload:     eventPayload,
+			TargetID:    documentID,
+			Payload:     encoded,
 		})
 		if err != nil {
 			return err
 		}
 
-		patched, err := tx.PatchDocument(ctx, session.WorldID(), storage.ID(payload.ID), storage.Patch{
-			Name:  payload.Name,
-			Sort:  payload.Sort,
-			Set:   payload.Set,
-			Unset: payload.Unset,
-			Seq:   seq,
-		})
+		patch.Seq = seq
+
+		patched, err := tx.PatchDocument(ctx, session.WorldID(), documentID, patch)
 		if err != nil {
 			return err
 		}
@@ -94,27 +127,27 @@ func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (
 
 	switch {
 	case errors.Is(err, access.ErrForbidden):
-		return nil, NewIntentError(CodeForbidden, "core.intent.forbidden")
+		return IntentResult{}, NewIntentError(CodeForbidden, "core.intent.forbidden")
 	case errors.Is(err, storage.ErrNotFound):
-		return nil, NewIntentError(CodeNotFound, "core.intent.documentNotFound")
+		return IntentResult{}, NewIntentError(CodeNotFound, "core.intent.documentNotFound")
 	case errors.Is(err, storage.ErrInvalidPath):
-		return nil, NewIntentError(CodeBadRequest, "core.intent.invalidPath")
+		return IntentResult{}, NewIntentError(CodeBadRequest, "core.intent.invalidPath")
 	case err != nil:
-		return nil, err
+		return IntentResult{}, err
 	}
 
 	perUser := make(map[storage.ID]Frame, len(views))
 	for userID, view := range views {
 		encoded, err := json.Marshal(viewOf(view, seq))
 		if err != nil {
-			return nil, err
+			return IntentResult{}, err
 		}
 		perUser[userID] = Frame{
 			Lane: LaneDocument,
 			Type: TypeEvent,
 			Event: &Event{
 				Seq:     seq,
-				Kind:    "document.patch",
+				Kind:    eventKind,
 				WorldID: string(session.WorldID()),
 				Payload: encoded,
 			},
@@ -129,9 +162,14 @@ func handleDocumentPatch(ctx context.Context, session *Session, intent Intent) (
 
 	own, present := views[session.UserID()]
 	if !present {
-		return nil, NewIntentError(CodeForbidden, "core.intent.forbidden")
+		return IntentResult{}, NewIntentError(CodeForbidden, "core.intent.forbidden")
 	}
-	return json.Marshal(viewOf(own, seq))
+
+	result, err := json.Marshal(viewOf(own, seq))
+	if err != nil {
+		return IntentResult{}, err
+	}
+	return IntentResult{Seq: seq, Result: result}, nil
 }
 
 func viewOf(view access.View, seq int64) DocumentView {

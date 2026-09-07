@@ -443,6 +443,9 @@ func TestPatchAcksAndFansOutToOtherSession(t *testing.T) {
 	if ack.Ack.RequestID != 17 {
 		t.Errorf("ack request id = %d", ack.Ack.RequestID)
 	}
+	if ack.Ack.Seq != 1 {
+		t.Errorf("ack seq = %d, want the sequence the intent produced", ack.Ack.Seq)
+	}
 
 	var result DocumentView
 	if err := json.Unmarshal(ack.Ack.Result, &result); err != nil {
