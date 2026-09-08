@@ -195,6 +195,10 @@ would have meant the socket hid a token that a plain `GET` handed over.
 see, so opening a door reveals what was behind it without anyone reloading. Closing it takes
 them away again.
 
+That push carries the same fields the socket's own document projection does, art included.
+It did not at first, so opening a door blanked every portrait on the table until someone
+reloaded, and a test now asserts the art survives the toggle.
+
 ## Combat
 
 `combat.start` gathers the tokens on a scene, rolls initiative for each and stores the

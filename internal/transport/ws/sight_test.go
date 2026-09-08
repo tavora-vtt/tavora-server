@@ -361,3 +361,37 @@ func TestCatchUpStillReplaysWhatThePlayerCanSee(t *testing.T) {
 		t.Errorf("catching up dropped a token the player owns:\n%s", raw)
 	}
 }
+
+func TestOpeningADoorKeepsTokenArt(t *testing.T) {
+	h := newHarness(t)
+	seedDoorScene(t, h)
+
+	art := "/assets/world-1/asset-portrait"
+	ctx := context.Background()
+	err := h.store.Tx(ctx, func(tx storage.Tx) error {
+		token, err := tx.GetDocument(ctx, testWorld, "own-token")
+		if err != nil {
+			return err
+		}
+		token.Img = art
+		return tx.PutDocument(ctx, token)
+	})
+	if err != nil {
+		t.Fatalf("give the token art: %v", err)
+	}
+
+	gm, _ := h.connect(t, "user-1", 0)
+	player, _ := h.connect(t, "user-2", 0)
+
+	payload, _ := json.Marshal(DoorTogglePayload{WallID: "door-1"})
+	gm.send(t, Frame{
+		Lane:   LaneDocument,
+		Type:   TypeIntent,
+		Intent: &Intent{RequestID: 1, Kind: "scene.door.toggle", Payload: payload},
+	})
+
+	received := drainUntil(t, player, `"scene.visibility"`, waitFor)
+	if !strings.Contains(received, art) {
+		t.Errorf("the visibility push dropped the token art, so a door toggle blanks every portrait:\n%s", received)
+	}
+}

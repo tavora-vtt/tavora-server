@@ -29,6 +29,7 @@ type VisibilityUpdate struct {
 type tokenBrief struct {
 	ID   string          `json:"id"`
 	Name string          `json:"name"`
+	Img  string          `json:"img,omitempty"`
 	Data json.RawMessage `json:"data"`
 }
 
@@ -212,7 +213,10 @@ func visibilityFrames(
 				continue
 			}
 			update.Tokens = append(update.Tokens, tokenBrief{
-				ID: string(redacted.ID), Name: redacted.Name, Data: redacted.Data,
+				ID:   string(redacted.ID),
+				Name: redacted.Name,
+				Img:  redacted.Img,
+				Data: redacted.Data,
 			})
 		}
 
